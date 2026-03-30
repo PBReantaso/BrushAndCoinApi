@@ -1,0 +1,19 @@
+{
+  "name": "brush-and-coin-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone API for Brush&Coin mobile app",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node scripts/run-migrations.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.20.0"
+  }
+}
