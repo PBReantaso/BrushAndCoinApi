@@ -18,5 +18,6 @@ router.post('/posts', requireAuth, contentController.createPost);
 router.post('/posts/:id/likes', requireAuth, contentController.likePost);
 router.delete('/posts/:id/likes', requireAuth, contentController.unlikePost);
 router.post('/posts/:id/comments', requireAuth, contentController.commentOnPost);
+router.get('/posts/:id/comments', requireAuth, contentController.postComments);
 
 module.exports = { contentRoutes: router };

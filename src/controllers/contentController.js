@@ -130,6 +130,15 @@ async function commentOnPost(req, res, next) {
   }
 }
 
+async function postComments(req, res, next) {
+  try {
+    const payload = await contentService.getPostComments(req.params.id, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   dashboard,
   artists,
@@ -145,4 +154,5 @@ module.exports = {
   likePost,
   unlikePost,
   commentOnPost,
+  postComments,
 };

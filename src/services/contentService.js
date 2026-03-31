@@ -232,6 +232,24 @@ async function commentOnPost(postId, input, user) {
   return { success: true };
 }
 
+async function getPostComments(postId, user) {
+  const id = Number(postId);
+  const userId = Number(user?.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid post id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const visible = await contentRepository.findPostVisibleToUser(id, userId);
+  if (!visible) {
+    const error = new Error('Post not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const comments = await contentRepository.listPostComments(id);
+  return { comments };
+}
+
 module.exports = {
   getDashboard,
   getArtists,
@@ -247,4 +265,5 @@ module.exports = {
   likePost,
   unlikePost,
   commentOnPost,
+  getPostComments,
 };

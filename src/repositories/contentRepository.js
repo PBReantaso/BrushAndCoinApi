@@ -533,6 +533,42 @@ async function addPostComment(postId, userId, comment) {
   );
 }
 
+async function listPostComments(postId) {
+  if (!isPostgresEnabled()) {
+    return memoryStore.postComments
+      .filter((c) => c.postId === postId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map((c) => {
+        const user = memoryStore.users.find((u) => u.id === c.userId);
+        const authorName = user?.username || user?.email || 'User';
+        return {
+          id: c.id,
+          postId: c.postId,
+          userId: c.userId,
+          authorName,
+          comment: c.comment,
+          createdAt: c.createdAt,
+        };
+      });
+  }
+
+  const result = await query(
+    `SELECT
+      c.id,
+      c.post_id AS "postId",
+      c.user_id AS "userId",
+      COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      c.comment,
+      c.created_at AS "createdAt"
+    FROM post_comments c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.post_id = $1
+    ORDER BY c.created_at ASC, c.id ASC`,
+    [postId],
+  );
+  return result.rows;
+}
+
 module.exports = {
   listArtists,
   listProjects,
@@ -549,4 +585,5 @@ module.exports = {
   likePost,
   unlikePost,
   addPostComment,
+  listPostComments,
 };
