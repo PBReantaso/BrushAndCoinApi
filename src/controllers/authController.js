@@ -36,9 +36,21 @@ async function me(req, res, next) {
   }
 }
 
+async function deleteAccount(req, res, next) {
+  try {
+    const userId = req.user?.id;
+    const { password } = req.body ?? {};
+    const payload = await authService.deleteAccount({ userId, password });
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   signup,
   login,
   refresh,
   me,
+  deleteAccount,
 };

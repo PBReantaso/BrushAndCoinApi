@@ -32,7 +32,33 @@ async function createUser({ email, password }) {
   return result.rows[0];
 }
 
+async function findUserById(id) {
+  if (!isPostgresEnabled()) {
+    return memoryStore.users.find((user) => user.id === id) || null;
+  }
+
+  const result = await query(
+    'SELECT id, email, password_hash AS password FROM users WHERE id = $1 LIMIT 1',
+    [id],
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteUserById(id) {
+  if (!isPostgresEnabled()) {
+    const index = memoryStore.users.findIndex((user) => user.id === id);
+    if (index !== -1) {
+      memoryStore.users.splice(index, 1);
+    }
+    return;
+  }
+
+  await query('DELETE FROM users WHERE id = $1', [id]);
+}
+
 module.exports = {
   findUserByEmail,
   createUser,
+  findUserById,
+  deleteUserById,
 };

@@ -95,6 +95,25 @@ function me(user) {
   };
 }
 
+async function deleteAccount({ userId, password }) {
+  if (!userId || !password) {
+    const error = new Error('Password is required to delete account.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const user = await authRepository.findUserById(userId);
+  const isValid = await _isPasswordValid(password, user?.password);
+  if (!user || !isValid) {
+    const error = new Error('Invalid password.');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  await authRepository.deleteUserById(userId);
+  return { success: true };
+}
+
 async function _isPasswordValid(inputPassword, storedPassword) {
   if (!storedPassword) {
     return false;
@@ -110,4 +129,5 @@ module.exports = {
   login,
   refresh,
   me,
+  deleteAccount,
 };
