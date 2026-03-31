@@ -3,6 +3,7 @@ const cors = require('cors');
 
 const { authRoutes } = require('./routes/authRoutes');
 const { contentRoutes } = require('./routes/contentRoutes');
+const { usersRoutes } = require('./routes/usersRoutes');
 const { healthRoutes } = require('./routes/healthRoutes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
@@ -13,6 +14,7 @@ app.use(express.json());
 
 app.use(healthRoutes);
 app.use(contentRoutes);
+app.use('/users', usersRoutes);
 app.use('/auth', authRoutes);
 
 app.use(notFoundHandler);

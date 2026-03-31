@@ -29,7 +29,7 @@ async function refresh(req, res, next) {
 
 async function me(req, res, next) {
   try {
-    const payload = authService.me(req.user);
+    const payload = await authService.me(req.user);
     res.json(payload);
   } catch (error) {
     next(error);

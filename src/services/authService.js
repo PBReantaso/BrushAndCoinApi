@@ -1,6 +1,34 @@
 const authRepository = require('../repositories/authRepository');
+const followsRepository = require('../repositories/followsRepository');
 const bcrypt = require('bcryptjs');
 const tokenService = require('./tokenService');
+
+const USERNAME_MAX_LEN = 48;
+
+function baseUsernameFromEmail(email) {
+  const local = String(email).split('@')[0] || 'user';
+  const cleaned = local.trim().replace(/[^a-zA-Z0-9_]/g, '');
+  return cleaned || 'user';
+}
+
+async function allocateSignupUsername(email) {
+  let base = baseUsernameFromEmail(email);
+  if (base.length > USERNAME_MAX_LEN) {
+    base = base.slice(0, USERNAME_MAX_LEN);
+  }
+  let candidate = base;
+  let n = 0;
+  for (;;) {
+    const exists = await authRepository.findUserIdByUsernameKey(candidate, 0);
+    if (!exists) {
+      return candidate;
+    }
+    n += 1;
+    const suffix = String(n);
+    const maxBase = Math.max(1, USERNAME_MAX_LEN - suffix.length);
+    candidate = base.slice(0, maxBase) + suffix;
+  }
+}
 
 async function signup({ email, password }) {
   if (!email || !password) {
@@ -17,7 +45,7 @@ async function signup({ email, password }) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const username = String(email).split('@')[0] || 'user';
+  const username = await allocateSignupUsername(email);
   const created = await authRepository.createUser({
     email,
     username,
@@ -96,12 +124,20 @@ async function refresh({ refreshToken }) {
   return { accessToken };
 }
 
-function me(user) {
+async function me(user) {
+  const userId = Number(user.id);
+  const dbUser = await authRepository.findUserById(userId);
+  const [followerCount, followingCount] = await Promise.all([
+    followsRepository.followerCount(userId),
+    followsRepository.followingCount(userId),
+  ]);
   return {
     user: {
-      id: user.id,
-      email: user.email,
-      username: user.username,
+      id: dbUser?.id ?? userId,
+      email: dbUser?.email ?? user.email,
+      username: dbUser?.username ?? user.username ?? '',
+      followerCount,
+      followingCount,
     },
   };
 }
@@ -116,6 +152,18 @@ async function updateProfile({ userId, username }) {
   if (!nextUsername) {
     const error = new Error('Username is required.');
     error.statusCode = 400;
+    throw error;
+  }
+  if (nextUsername.length > USERNAME_MAX_LEN) {
+    const error = new Error(`Username must be at most ${USERNAME_MAX_LEN} characters.`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const taken = await authRepository.findUserIdByUsernameKey(nextUsername, userId);
+  if (taken) {
+    const error = new Error('Username is already taken.');
+    error.statusCode = 409;
     throw error;
   }
 

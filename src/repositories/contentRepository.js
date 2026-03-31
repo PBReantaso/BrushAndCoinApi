@@ -393,6 +393,59 @@ async function listMyPosts(userId) {
   return result.rows;
 }
 
+async function listPostsForProfile(profileUserId, viewerUserId) {
+  if (!isPostgresEnabled()) {
+    return memoryStore.posts
+      .filter((p) => p.userId === profileUserId)
+      .map((p) => {
+        const likeCount = memoryStore.postLikes.filter((l) => l.postId === p.id).length;
+        const commentCount = memoryStore.postComments.filter((c) => c.postId === p.id).length;
+        const likedByMe = memoryStore.postLikes.some(
+          (l) => l.postId === p.id && l.userId === viewerUserId,
+        );
+        return { ...p, likeCount, commentCount, likedByMe };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  const result = await query(
+    `SELECT
+      p.id,
+      p.user_id AS "userId",
+      COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      p.title,
+      p.description,
+      p.category,
+      p.price,
+      p.is_commission_available AS "isCommissionAvailable",
+      p.tags,
+      p.image_url AS "imageUrl",
+      p.created_at AS "createdAt",
+      COALESCE(lc.like_count, 0)::int AS "likeCount",
+      COALESCE(cc.comment_count, 0)::int AS "commentCount",
+      EXISTS(
+        SELECT 1 FROM post_likes pl
+        WHERE pl.post_id = p.id AND pl.user_id = $2
+      ) AS "likedByMe"
+    FROM posts p
+    JOIN users u ON u.id = p.user_id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS like_count
+      FROM post_likes
+      GROUP BY post_id
+    ) lc ON lc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS comment_count
+      FROM post_comments
+      GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    WHERE p.user_id = $1
+    ORDER BY p.created_at DESC`,
+    [profileUserId, viewerUserId],
+  );
+  return result.rows;
+}
+
 async function createPost({
   userId,
   title,
@@ -580,6 +633,7 @@ module.exports = {
   deleteEventById,
   listFeedPosts,
   listMyPosts,
+  listPostsForProfile,
   createPost,
   findPostVisibleToUser,
   likePost,
