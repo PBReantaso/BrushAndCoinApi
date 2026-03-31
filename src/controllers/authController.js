@@ -47,10 +47,22 @@ async function deleteAccount(req, res, next) {
   }
 }
 
+async function updateProfile(req, res, next) {
+  try {
+    const userId = req.user?.id;
+    const { username } = req.body ?? {};
+    const payload = await authService.updateProfile({ userId, username });
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   signup,
   login,
   refresh,
   me,
+  updateProfile,
   deleteAccount,
 };

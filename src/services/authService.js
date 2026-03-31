@@ -17,19 +17,26 @@ async function signup({ email, password }) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const created = await authRepository.createUser({ email, password: passwordHash });
+  const username = String(email).split('@')[0] || 'user';
+  const created = await authRepository.createUser({
+    email,
+    username,
+    password: passwordHash,
+  });
   const accessToken = tokenService.issueAccessToken({
     sub: created.id,
     email: created.email,
+    username: created.username,
   });
   const refreshToken = tokenService.issueRefreshToken({
     sub: created.id,
     email: created.email,
+    username: created.username,
   });
   return {
     accessToken,
     refreshToken,
-    user: { id: created.id, email: created.email },
+    user: { id: created.id, email: created.email, username: created.username },
   };
 }
 
@@ -51,15 +58,17 @@ async function login({ email, password }) {
   const accessToken = tokenService.issueAccessToken({
     sub: user.id,
     email: user.email,
+    username: user.username,
   });
   const refreshToken = tokenService.issueRefreshToken({
     sub: user.id,
     email: user.email,
+    username: user.username,
   });
   return {
     accessToken,
     refreshToken,
-    user: { id: user.id, email: user.email },
+    user: { id: user.id, email: user.email, username: user.username },
   };
 }
 
@@ -82,6 +91,7 @@ async function refresh({ refreshToken }) {
   const accessToken = tokenService.issueAccessToken({
     sub: payload.sub,
     email: payload.email,
+    username: payload.username,
   });
   return { accessToken };
 }
@@ -91,7 +101,48 @@ function me(user) {
     user: {
       id: user.id,
       email: user.email,
+      username: user.username,
     },
+  };
+}
+
+async function updateProfile({ userId, username }) {
+  if (!userId) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const nextUsername = String(username ?? '').trim();
+  if (!nextUsername) {
+    const error = new Error('Username is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const updated = await authRepository.updateUserProfileById(userId, {
+    username: nextUsername,
+  });
+  if (!updated) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const accessToken = tokenService.issueAccessToken({
+    sub: updated.id,
+    email: updated.email,
+    username: updated.username,
+  });
+  const refreshToken = tokenService.issueRefreshToken({
+    sub: updated.id,
+    email: updated.email,
+    username: updated.username,
+  });
+
+  return {
+    accessToken,
+    refreshToken,
+    user: updated,
   };
 }
 
@@ -129,5 +180,6 @@ module.exports = {
   login,
   refresh,
   me,
+  updateProfile,
   deleteAccount,
 };

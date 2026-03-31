@@ -34,6 +34,31 @@ const memoryStore = {
     { id: 2, name: 'Local Café' },
     { id: 3, name: 'Event Organizer' },
   ],
+  events: [
+    {
+      id: 1,
+      title: 'Bicol Cosplay Arena',
+      category: 'Art',
+      eventDate: '2026-03-29',
+      eventTime: '18:00',
+      venue: 'Naga City Event Grounds',
+      locationText: 'Naga, Camarines Sur',
+      latitude: 13.6218,
+      longitude: 123.1948,
+      description: 'Community cosplay and art showcase.',
+      additionalInfo: '',
+      imageUrl: null,
+      schedules: [
+        { name: 'Gates Open', time: '16:30', description: 'Entry and registration' },
+      ],
+      createdBy: 1,
+      createdAt: new Date().toISOString(),
+    },
+  ],
+  follows: [],
+  posts: [],
+  postLikes: [],
+  postComments: [],
 };
 
 module.exports = { memoryStore };
