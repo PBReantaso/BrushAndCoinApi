@@ -29,8 +29,37 @@ async function projects(req, res, next) {
 
 async function messages(req, res, next) {
   try {
-    const payload = await contentService.getMessages();
+    const payload = await contentService.getMessages(req.user);
     res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getConversationMessages(req, res, next) {
+  try {
+    const conversationId = Number(req.params.id);
+    const payload = await contentService.getConversationMessages(conversationId, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function sendMessage(req, res, next) {
+  try {
+    const conversationId = Number(req.params.id);
+    const payload = await contentService.sendMessage(conversationId, req.body ?? {}, req.user);
+    res.status(201).json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function startConversation(req, res, next) {
+  try {
+    const payload = await contentService.startConversation(req.body ?? {}, req.user);
+    res.status(201).json(payload);
   } catch (error) {
     next(error);
   }
@@ -144,6 +173,9 @@ module.exports = {
   artists,
   projects,
   messages,
+  getConversationMessages,
+  sendMessage,
+  startConversation,
   events,
   createEvent,
   updateEvent,

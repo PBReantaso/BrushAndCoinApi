@@ -15,9 +15,78 @@ async function getProjects() {
   return { projects };
 }
 
-async function getMessages() {
-  const conversations = await contentRepository.listConversations();
+async function getMessages(user) {
+  const conversations = await contentRepository.listConversationsByUser(user?.id);
   return { conversations };
+}
+
+async function getConversationMessages(conversationId, user) {
+  if (!user?.id) {
+    const error = new Error('User not authenticated.');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const isParticipant = await contentRepository.isUserInConversation(conversationId, user.id);
+  if (!isParticipant) {
+    const error = new Error('Forbidden: not participant in this conversation.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const messages = await contentRepository.listMessages(conversationId);
+  return { messages };
+}
+
+async function sendMessage(conversationId, input, user) {
+  if (!user?.id) {
+    const error = new Error('User not authenticated.');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const isParticipant = await contentRepository.isUserInConversation(conversationId, user.id);
+  if (!isParticipant) {
+    const error = new Error('Forbidden: not participant in this conversation.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const content = String(input?.content ?? '').trim();
+  if (!content) {
+    const error = new Error('Message content is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const message = await contentRepository.createMessage({
+    conversationId,
+    senderId: user.id,
+    content,
+  });
+
+  // Update conversation's last message
+  await contentRepository.updateConversationLastMessage(conversationId, content);
+
+  return { message };
+}
+
+async function startConversation(input, user) {
+  const otherUserId = input?.otherUserId;
+  if (!otherUserId || typeof otherUserId !== 'number') {
+    const error = new Error('Other user ID is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Check if conversation already exists
+  let conversation = await contentRepository.findConversationBetweenUsers(user?.id, otherUserId);
+  if (!conversation) {
+    // Create new conversation
+    conversation = await contentRepository.createConversation(user?.id, otherUserId);
+  }
+
+  return { conversation };
 }
 
 async function getEvents() {
@@ -255,6 +324,9 @@ module.exports = {
   getArtists,
   getProjects,
   getMessages,
+  getConversationMessages,
+  startConversation,
+  sendMessage,
   getEvents,
   createEvent,
   updateEvent,

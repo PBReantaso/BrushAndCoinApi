@@ -31,6 +31,18 @@ async function query(text, params = []) {
   return getPool().query(text, params);
 }
 
+async function probeConnection() {
+  if (!isPostgresEnabled()) {
+    return true;
+  }
+  try {
+    await query('SELECT 1');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function closePool() {
   if (pool) {
     await pool.end();
@@ -43,4 +55,5 @@ module.exports = {
   getPool,
   query,
   closePool,
+  probeConnection,
 };
