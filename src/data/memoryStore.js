@@ -30,9 +30,13 @@ const memoryStore = {
     },
   ],
   conversations: [
-    { id: 1, name: 'Ana Santos' },
-    { id: 2, name: 'Local Café' },
-    { id: 3, name: 'Event Organizer' },
+    { id: 1, name: 'Ana Santos', lastMessage: 'Can I commission snake pasta art?', lastMessageDate: '2026-04-02T19:47:00Z' },
+    { id: 2, name: 'Local Café', lastMessage: 'I love myself. Can u draw me?', lastMessageDate: '2026-04-02T18:07:00Z' },
+    { id: 3, name: 'Event Organizer', lastMessage: 'I’m sorry because I am lost', lastMessageDate: '2026-02-17T10:00:00Z' },
+  ],
+  conversationParticipants: [
+    // Demo user (ID 1) should only be in conversations they've actually participated in
+    // For now, leave empty - user will see no conversations until they start chatting
   ],
   events: [
     {

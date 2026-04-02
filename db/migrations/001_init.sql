@@ -33,3 +33,21 @@ CREATE TABLE IF NOT EXISTS conversations (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL
 );
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_message TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_message_date TIMESTAMP;
+
+CREATE TABLE IF NOT EXISTS conversation_participants (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(conversation_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id INTEGER NOT NULL REFERENCES users(id),
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

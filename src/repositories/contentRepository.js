@@ -61,9 +61,278 @@ async function listConversations() {
   }
 
   const result = await query(
-    'SELECT id, name FROM conversations ORDER BY id ASC',
+    'SELECT id, name, last_message AS "lastMessage", last_message_date AS "lastMessageDate" FROM conversations ORDER BY id ASC',
   );
   return result.rows;
+}
+
+async function listConversationsByUser(userId) {
+  if (!isPostgresEnabled()) {
+    if (!userId) return [];
+
+    const participantConversations = memoryStore.conversationParticipants
+      .filter((cp) => cp.userId === userId)
+      .map((cp) => cp.conversationId);
+
+    const uniqueConversationIds = [...new Set(participantConversations)];
+
+    return uniqueConversationIds
+      .map((conversationId) => {
+        const conversation = memoryStore.conversations.find((c) => c.id === conversationId);
+        if (!conversation) return null;
+
+        // Find other participants (excluding current user)
+        const otherParticipants = memoryStore.conversationParticipants
+          .filter((cp) => cp.conversationId === conversationId && cp.userId !== userId)
+          .map((cp) => memoryStore.users.find((u) => u.id === cp.userId))
+          .filter((u) => u != null);
+
+        let otherName = conversation.name;
+        if (otherParticipants.length > 0) {
+          const otherUser = otherParticipants[0];
+          otherName = otherUser.username || otherUser.email || otherName;
+        }
+
+        // Prevent current username appearing as the conversation title
+        const currentUser = memoryStore.users.find((u) => u.id === userId);
+        const currentUsername = currentUser
+          ? currentUser.username || (currentUser.email || '').split('@')[0]
+          : null;
+
+        if (currentUsername && otherName === currentUsername) {
+          const fallback = otherParticipants
+            .map((ou) => ou.username || (ou.email || '').split('@')[0])
+            .find((n) => n && n !== currentUsername);
+          if (fallback) {
+            otherName = fallback;
+          }
+        }
+
+        return {
+          id: conversation.id,
+          name: otherName,
+          lastMessage: conversation.lastMessage,
+          lastMessageDate: conversation.lastMessageDate,
+        };
+      })
+      .filter((item) => item != null);
+  }
+
+  if (!userId) {
+    // If userId is null/undefined, return empty list
+    return [];
+  }
+
+  const result = await query(
+    `SELECT DISTINCT
+      c.id,
+      COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1), c.name) AS name,
+      c.last_message AS "lastMessage",
+      c.last_message_date AS "lastMessageDate"
+    FROM conversations c
+    INNER JOIN conversation_participants cp_me ON c.id = cp_me.conversation_id AND cp_me.user_id = $1
+    INNER JOIN conversation_participants cp_other ON c.id = cp_other.conversation_id AND cp_other.user_id != $1
+    INNER JOIN users u_other ON u_other.id = cp_other.user_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM conversation_participants cp_check
+      WHERE cp_check.conversation_id = c.id
+        AND cp_check.user_id NOT IN ($1, cp_other.user_id)
+    )
+    ORDER BY c.last_message_date DESC NULLS LAST, c.id DESC`,
+    [userId],
+  );
+  return result.rows;
+}
+
+async function listMessages(conversationId) {
+  if (!isPostgresEnabled()) {
+    // For in-memory, return some dummy messages
+    return [
+      { id: 1, conversationId, senderId: 1, content: 'Hello!', createdAt: '2026-04-02T10:00:00Z' },
+      { id: 2, conversationId, senderId: 2, content: 'Hi there!', createdAt: '2026-04-02T10:05:00Z' },
+    ];
+  }
+
+  const result = await query(
+    'SELECT id, conversation_id AS "conversationId", sender_id AS "senderId", content, created_at AS "createdAt" FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC',
+    [conversationId],
+  );
+  return result.rows;
+}
+
+async function createMessage({ conversationId, senderId, content }) {
+  if (!isPostgresEnabled()) {
+    // For in-memory, just return a dummy message
+    return { id: Date.now(), conversationId, senderId, content, createdAt: new Date().toISOString() };
+  }
+
+  const result = await query(
+    'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3) RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId", content, created_at AS "createdAt"',
+    [conversationId, senderId, content],
+  );
+  return result.rows[0];
+}
+
+async function updateConversationLastMessage(conversationId, lastMessage) {
+  if (!isPostgresEnabled()) {
+    // Update in-memory
+    const convo = memoryStore.conversations.find(c => c.id === conversationId);
+    if (convo) {
+      convo.lastMessage = lastMessage;
+      convo.lastMessageDate = new Date().toISOString();
+    }
+    return;
+  }
+
+  await query(
+    'UPDATE conversations SET last_message = $1, last_message_date = CURRENT_TIMESTAMP WHERE id = $2',
+    [lastMessage, conversationId],
+  );
+}
+
+async function findConversationBetweenUsers(userId1, userId2) {
+  if (!isPostgresEnabled()) {
+    // For in-memory, return null to allow creating new conversations
+    return null;
+  }
+
+  const result = await query(
+    `SELECT c.id,
+      COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1)) AS name,
+      c.last_message AS "lastMessage",
+      c.last_message_date AS "lastMessageDate"
+     FROM conversations c
+     INNER JOIN conversation_participants cp_current
+       ON c.id = cp_current.conversation_id AND cp_current.user_id = $1
+     INNER JOIN conversation_participants cp_other
+       ON c.id = cp_other.conversation_id AND cp_other.user_id = $2
+     INNER JOIN users u_other ON u_other.id = $2
+     LIMIT 1`,
+    [userId1, userId2],
+  );
+  return result.rows[0];
+}
+
+async function isUserInConversation(conversationId, userId) {
+  if (!isPostgresEnabled()) {
+    return memoryStore.conversationParticipants.some(
+      (cp) => cp.conversationId === conversationId && cp.userId === userId,
+    );
+  }
+
+  const result = await query(
+    'SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 LIMIT 1',
+    [conversationId, userId],
+  );
+  return result.rows.length > 0;
+}
+
+async function findConversationById(conversationId) {
+  if (!isPostgresEnabled()) {
+    return memoryStore.conversations.find(c => c.id === conversationId) || null;
+  }
+
+  const result = await query(
+    'SELECT id, name, last_message AS "lastMessage", last_message_date AS "lastMessageDate" FROM conversations WHERE id = $1 LIMIT 1',
+    [conversationId],
+  );
+  return result.rows[0] || null;
+}
+
+async function findConversationByIdForUser(conversationId, userId) {
+  if (!isPostgresEnabled()) {
+    const conversation = memoryStore.conversations.find(c => c.id === conversationId);
+    if (!conversation) return null;
+
+    const otherParticipant = memoryStore.conversationParticipants.find(
+      (cp) => cp.conversationId === conversationId && cp.userId !== userId,
+    );
+
+    let otherName = conversation.name;
+    if (otherParticipant) {
+      const otherUser = memoryStore.users.find((u) => u.id === otherParticipant.userId);
+      if (otherUser) {
+        otherName = otherUser.username || otherUser.email || otherName;
+      }
+    }
+
+    return {
+      id: conversation.id,
+      name: otherName,
+      lastMessage: conversation.lastMessage,
+      lastMessageDate: conversation.lastMessageDate,
+    };
+  }
+
+  const result = await query(
+    `SELECT
+      c.id,
+      COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1)) AS name,
+      c.last_message AS "lastMessage",
+      c.last_message_date AS "lastMessageDate"
+    FROM conversations c
+    INNER JOIN conversation_participants cp_current ON c.id = cp_current.conversation_id AND cp_current.user_id = $1
+    INNER JOIN conversation_participants cp_other ON c.id = cp_other.conversation_id AND cp_other.user_id != $1
+    INNER JOIN users u_other ON u_other.id = cp_other.user_id
+    WHERE c.id = $2
+    LIMIT 1`,
+    [userId, conversationId],
+  );
+  return result.rows[0] || null;
+}
+
+async function createConversation(userId1, userId2) {
+  if (!isPostgresEnabled()) {
+    // For in-memory, create a new conversation
+    const nextId = memoryStore.conversations.length > 0 
+      ? Math.max(...memoryStore.conversations.map(c => c.id)) + 1 
+      : 1;
+
+    const otherUser = memoryStore.users.find((u) => u.id === userId2);
+    const otherName = otherUser
+      ? otherUser.username || (otherUser.email || '').split('@')[0] || 'User'
+      : 'User';
+
+    const conversation = {
+      id: nextId,
+      name: otherName,
+      lastMessage: null,
+      lastMessageDate: null,
+    };
+    memoryStore.conversations.push(conversation);
+    
+    // Add participants to conversation
+    memoryStore.conversationParticipants.push(
+      { conversationId: nextId, userId: userId1 },
+      { conversationId: nextId, userId: userId2 }
+    );
+    
+    return conversation;
+  }
+
+  // Get usernames
+  const usersResult = await query(
+    'SELECT id, username FROM users WHERE id IN ($1, $2)',
+    [userId1, userId2],
+  );
+  const user1 = usersResult.rows.find(u => u.id === userId1);
+  const user2 = usersResult.rows.find(u => u.id === userId2);
+  const name = user2?.username || 'User';
+
+  // Create conversation
+  const convResult = await query(
+    'INSERT INTO conversations (name) VALUES ($1) RETURNING id, name',
+    [name],
+  );
+  const conversation = convResult.rows[0];
+
+  // Add participants
+  await query(
+    'INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2), ($1, $3)',
+    [conversation.id, userId1, userId2],
+  );
+
+  return { id: conversation.id, name: conversation.name };
 }
 
 async function listEvents() {
@@ -626,6 +895,15 @@ module.exports = {
   listArtists,
   listProjects,
   listConversations,
+  listConversationsByUser,
+  listMessages,
+  createMessage,
+  updateConversationLastMessage,
+  isUserInConversation,
+  findConversationBetweenUsers,
+  findConversationById,
+  findConversationByIdForUser,
+  createConversation,
   listEvents,
   createEvent,
   findEventById,
