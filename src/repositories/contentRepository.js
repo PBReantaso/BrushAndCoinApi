@@ -1,5 +1,25 @@
 const { isPostgresEnabled, query } = require('../config/database');
 const { memoryStore } = require('../data/memoryStore');
+const authRepository = require('./authRepository');
+const followsRepository = require('./followsRepository');
+
+async function canViewerSeeProfilePosts(profileUserId, viewerUserId) {
+  const pid = Number(profileUserId);
+  const vid = Number(viewerUserId);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  if (pid === vid) {
+    return true;
+  }
+  if (!(await authRepository.isUserPrivate(pid))) {
+    return true;
+  }
+  if (!Number.isFinite(vid) || vid <= 0) {
+    return false;
+  }
+  return followsRepository.isFollowing(vid, pid);
+}
 
 async function listArtists() {
   if (!isPostgresEnabled()) {
@@ -146,11 +166,11 @@ async function listConversationsByUser(userId) {
 
 async function listMessages(conversationId) {
   if (!isPostgresEnabled()) {
-    // For in-memory, return some dummy messages
-    return [
-      { id: 1, conversationId, senderId: 1, content: 'Hello!', createdAt: '2026-04-02T10:00:00Z' },
-      { id: 2, conversationId, senderId: 2, content: 'Hi there!', createdAt: '2026-04-02T10:05:00Z' },
-    ];
+    const cid = Number(conversationId);
+    const rows = (memoryStore.messages || []).filter((m) => Number(m.conversationId) === cid);
+    return rows.sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
   }
 
   const result = await query(
@@ -162,8 +182,16 @@ async function listMessages(conversationId) {
 
 async function createMessage({ conversationId, senderId, content }) {
   if (!isPostgresEnabled()) {
-    // For in-memory, just return a dummy message
-    return { id: Date.now(), conversationId, senderId, content, createdAt: new Date().toISOString() };
+    const id = (memoryStore.messages?.length ? Math.max(...memoryStore.messages.map((m) => m.id)) : 0) + 1;
+    const msg = {
+      id,
+      conversationId: Number(conversationId),
+      senderId: Number(senderId),
+      content: String(content),
+      createdAt: new Date().toISOString(),
+    };
+    memoryStore.messages.push(msg);
+    return msg;
   }
 
   const result = await query(
@@ -171,6 +199,92 @@ async function createMessage({ conversationId, senderId, content }) {
     [conversationId, senderId, content],
   );
   return result.rows[0];
+}
+
+async function upsertConversationRead(conversationId, userId) {
+  const cid = Number(conversationId);
+  const uid = Number(userId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(uid) || uid <= 0) {
+    return;
+  }
+  const now = new Date().toISOString();
+  if (!isPostgresEnabled()) {
+    if (!memoryStore.conversationReads) memoryStore.conversationReads = [];
+    const idx = memoryStore.conversationReads.findIndex(
+      (r) => Number(r.conversationId) === cid && Number(r.userId) === uid,
+    );
+    const row = { conversationId: cid, userId: uid, lastReadAt: now };
+    if (idx >= 0) memoryStore.conversationReads[idx] = row;
+    else memoryStore.conversationReads.push(row);
+    return;
+  }
+  await query(
+    `INSERT INTO conversation_reads (conversation_id, user_id, last_read_at)
+     VALUES ($1, $2, CURRENT_TIMESTAMP)
+     ON CONFLICT (conversation_id, user_id)
+     DO UPDATE SET last_read_at = CURRENT_TIMESTAMP`,
+    [cid, uid],
+  );
+}
+
+async function unreadMessagesCountForUser(userId) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return 0;
+
+  if (!isPostgresEnabled()) {
+    const convIds = [
+      ...new Set(
+        (memoryStore.conversationParticipants || [])
+          .filter((cp) => Number(cp.userId) === uid)
+          .map((cp) => Number(cp.conversationId)),
+      ),
+    ];
+    let count = 0;
+    for (const cid of convIds) {
+      const msgs = (memoryStore.messages || []).filter((m) => Number(m.conversationId) === cid);
+      if (msgs.length === 0) continue;
+      const last = msgs.reduce((a, b) =>
+        new Date(a.createdAt).getTime() >= new Date(b.createdAt).getTime() ? a : b,
+      );
+      if (Number(last.senderId) === uid) continue;
+      const read = (memoryStore.conversationReads || []).find(
+        (r) => Number(r.conversationId) === cid && Number(r.userId) === uid,
+      );
+      if (!read || new Date(last.createdAt).getTime() > new Date(read.lastReadAt).getTime()) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  const result = await query(
+    `WITH last_per_conv AS (
+       SELECT DISTINCT ON (conversation_id)
+         conversation_id,
+         sender_id,
+         created_at
+       FROM messages
+       ORDER BY conversation_id, id DESC
+     )
+     SELECT COUNT(*)::int AS c
+     FROM last_per_conv lp
+     INNER JOIN conversation_participants cp
+       ON cp.conversation_id = lp.conversation_id AND cp.user_id = $1
+     WHERE lp.sender_id <> $1
+       AND (
+         NOT EXISTS (
+           SELECT 1 FROM conversation_reads cr
+           WHERE cr.conversation_id = lp.conversation_id AND cr.user_id = $1
+         )
+         OR lp.created_at > (
+           SELECT cr.last_read_at FROM conversation_reads cr
+           WHERE cr.conversation_id = lp.conversation_id AND cr.user_id = $1
+         )
+       )`,
+    [uid],
+  );
+  const row = result.rows[0];
+  return row && row.c != null ? Number(row.c) : 0;
 }
 
 async function updateConversationLastMessage(conversationId, lastMessage) {
@@ -225,6 +339,26 @@ async function isUserInConversation(conversationId, userId) {
     [conversationId, userId],
   );
   return result.rows.length > 0;
+}
+
+async function listConversationParticipantIdsExcluding(conversationId, excludeUserId) {
+  const cid = Number(conversationId);
+  const ex = Number(excludeUserId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(ex) || ex <= 0) {
+    return [];
+  }
+
+  if (!isPostgresEnabled()) {
+    return memoryStore.conversationParticipants
+      .filter((cp) => cp.conversationId === cid && cp.userId !== ex)
+      .map((cp) => cp.userId);
+  }
+
+  const result = await query(
+    'SELECT user_id AS id FROM conversation_participants WHERE conversation_id = $1 AND user_id != $2',
+    [cid, ex],
+  );
+  return result.rows.map((r) => r.id);
 }
 
 async function findConversationById(conversationId) {
@@ -398,6 +532,9 @@ async function createEvent({
       createdAt: new Date().toISOString(),
     };
     memoryStore.events.push(event);
+    if (createdBy != null) {
+      await addEventParticipant(nextId, createdBy);
+    }
     return event;
   }
 
@@ -442,7 +579,108 @@ async function createEvent({
     ],
   );
 
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row && createdBy != null) {
+    await addEventParticipant(row.id, createdBy);
+  }
+  return row;
+}
+
+async function addEventParticipant(eventId, userId) {
+  const eid = Number(eventId);
+  const uid = Number(userId);
+  if (!Number.isFinite(eid) || eid <= 0 || !Number.isFinite(uid) || uid <= 0) {
+    return false;
+  }
+  if (!isPostgresEnabled()) {
+    if (!memoryStore.eventParticipants) memoryStore.eventParticipants = [];
+    const exists = memoryStore.eventParticipants.some(
+      (p) => Number(p.eventId) === eid && Number(p.userId) === uid,
+    );
+    if (exists) return true;
+    memoryStore.eventParticipants.push({
+      eventId: eid,
+      userId: uid,
+      joinedAt: new Date().toISOString(),
+    });
+    return true;
+  }
+  await query(
+    `INSERT INTO event_participants (event_id, user_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING`,
+    [eid, uid],
+  );
+  return true;
+}
+
+async function listEventParticipants(eventId) {
+  const eid = Number(eventId);
+  if (!Number.isFinite(eid) || eid <= 0) {
+    return [];
+  }
+  if (!isPostgresEnabled()) {
+    const event = memoryStore.events.find((ev) => Number(ev.id) === eid);
+    const creatorId = event?.createdBy != null ? Number(event.createdBy) : null;
+    const rows = (memoryStore.eventParticipants || []).filter((p) => Number(p.eventId) === eid);
+    const byUser = new Map();
+    for (const p of rows) {
+      const uid = Number(p.userId);
+      const u = memoryStore.users.find((x) => Number(x.id) === uid);
+      const username = u?.username || (u?.email || '').split('@')[0] || 'User';
+      byUser.set(uid, {
+        userId: uid,
+        username,
+        isOrganizer: creatorId != null && uid === creatorId,
+      });
+    }
+    if (creatorId != null && !byUser.has(creatorId)) {
+      const u = memoryStore.users.find((x) => Number(x.id) === creatorId);
+      const username = u?.username || (u?.email || '').split('@')[0] || 'Organizer';
+      byUser.set(creatorId, {
+        userId: creatorId,
+        username,
+        isOrganizer: true,
+      });
+    }
+    const out = [...byUser.values()];
+    out.sort((a, b) => {
+      if (a.isOrganizer !== b.isOrganizer) return a.isOrganizer ? -1 : 1;
+      return a.username.localeCompare(b.username);
+    });
+    return out;
+  }
+
+  const result = await query(
+    `SELECT
+      ep.user_id AS "userId",
+      COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "username",
+      (ep.user_id = e.created_by) AS "isOrganizer"
+    FROM event_participants ep
+    JOIN users u ON u.id = ep.user_id
+    JOIN events e ON e.id = ep.event_id
+    WHERE ep.event_id = $1
+    ORDER BY CASE WHEN ep.user_id = e.created_by THEN 0 ELSE 1 END, ep.joined_at ASC`,
+    [eid],
+  );
+  return result.rows;
+}
+
+async function isUserEventParticipant(eventId, userId) {
+  const eid = Number(eventId);
+  const uid = Number(userId);
+  if (!Number.isFinite(eid) || !Number.isFinite(uid)) {
+    return false;
+  }
+  if (!isPostgresEnabled()) {
+    return (memoryStore.eventParticipants || []).some(
+      (p) => Number(p.eventId) === eid && Number(p.userId) === uid,
+    );
+  }
+  const result = await query(
+    'SELECT 1 FROM event_participants WHERE event_id = $1 AND user_id = $2 LIMIT 1',
+    [eid, uid],
+  );
+  return result.rows.length > 0;
 }
 
 async function findEventById(eventId) {
@@ -567,7 +805,14 @@ async function listFeedPosts(userId) {
         const likedByMe = memoryStore.postLikes.some(
           (l) => l.postId === p.id && l.userId === userId,
         );
-        return { ...p, likeCount, commentCount, likedByMe };
+        const author = memoryStore.users.find((u) => Number(u.id) === Number(p.userId));
+        return {
+          ...p,
+          likeCount,
+          commentCount,
+          likedByMe,
+          authorAvatarUrl: author?.avatarUrl ?? null,
+        };
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
@@ -577,6 +822,7 @@ async function listFeedPosts(userId) {
       p.id,
       p.user_id AS "userId",
       COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
       p.title,
       p.description,
       p.category,
@@ -624,7 +870,14 @@ async function listPostsByTag(userId, rawTag) {
         .map((f) => Number(f.followedId)),
     );
     return memoryStore.posts
-      .filter((p) => Number(p.userId) === Number(userId) || followed.has(Number(p.userId)))
+      .filter((p) => {
+        const authorId = Number(p.userId);
+        if (authorId === Number(userId)) return true;
+        const author = memoryStore.users.find((u) => Number(u.id) === authorId);
+        const priv = Boolean(author?.isPrivate);
+        if (!priv) return true;
+        return followed.has(authorId);
+      })
       .filter((p) => {
         const tags = Array.isArray(p.tags) ? p.tags : [];
         return tags.some((t) => _normalizeTag(t) === tag);
@@ -635,7 +888,14 @@ async function listPostsByTag(userId, rawTag) {
         const likedByMe = memoryStore.postLikes.some(
           (l) => l.postId === p.id && l.userId === userId,
         );
-        return { ...p, likeCount, commentCount, likedByMe };
+        const author = memoryStore.users.find((u) => Number(u.id) === Number(p.userId));
+        return {
+          ...p,
+          likeCount,
+          commentCount,
+          likedByMe,
+          authorAvatarUrl: author?.avatarUrl ?? null,
+        };
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
@@ -645,6 +905,7 @@ async function listPostsByTag(userId, rawTag) {
       p.id,
       p.user_id AS "userId",
       COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
       p.title,
       p.description,
       p.category,
@@ -673,7 +934,14 @@ async function listPostsByTag(userId, rawTag) {
     ) cc ON cc.post_id = p.id
     WHERE (
       p.user_id = $1
-      OR p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = $1)
+      OR EXISTS (
+        SELECT 1 FROM users u2
+        WHERE u2.id = p.user_id AND COALESCE(u2.is_private, FALSE) = FALSE
+      )
+      OR EXISTS (
+        SELECT 1 FROM follows f2
+        WHERE f2.follower_id = $1 AND f2.followed_id = p.user_id
+      )
     )
     AND EXISTS (
       SELECT 1
@@ -696,7 +964,14 @@ async function listMyPosts(userId) {
         const likedByMe = memoryStore.postLikes.some(
           (l) => l.postId === p.id && l.userId === userId,
         );
-        return { ...p, likeCount, commentCount, likedByMe };
+        const author = memoryStore.users.find((u) => Number(u.id) === Number(p.userId));
+        return {
+          ...p,
+          likeCount,
+          commentCount,
+          likedByMe,
+          authorAvatarUrl: author?.avatarUrl ?? null,
+        };
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
@@ -706,6 +981,7 @@ async function listMyPosts(userId) {
       p.id,
       p.user_id AS "userId",
       COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
       p.title,
       p.description,
       p.category,
@@ -740,6 +1016,10 @@ async function listMyPosts(userId) {
 }
 
 async function listPostsForProfile(profileUserId, viewerUserId) {
+  if (!(await canViewerSeeProfilePosts(profileUserId, viewerUserId))) {
+    return [];
+  }
+
   if (!isPostgresEnabled()) {
     return memoryStore.posts
       .filter((p) => p.userId === profileUserId)
@@ -749,7 +1029,14 @@ async function listPostsForProfile(profileUserId, viewerUserId) {
         const likedByMe = memoryStore.postLikes.some(
           (l) => l.postId === p.id && l.userId === viewerUserId,
         );
-        return { ...p, likeCount, commentCount, likedByMe };
+        const author = memoryStore.users.find((u) => Number(u.id) === Number(p.userId));
+        return {
+          ...p,
+          likeCount,
+          commentCount,
+          likedByMe,
+          authorAvatarUrl: author?.avatarUrl ?? null,
+        };
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
@@ -759,6 +1046,7 @@ async function listPostsForProfile(profileUserId, viewerUserId) {
       p.id,
       p.user_id AS "userId",
       COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
       p.title,
       p.description,
       p.category,
@@ -804,13 +1092,12 @@ async function createPost({
 }) {
   if (!isPostgresEnabled()) {
     const nextId = (memoryStore.posts.at(-1)?.id ?? 0) + 1;
+    const authorUser = memoryStore.users.find((u) => u.id === userId);
     const post = {
       id: nextId,
       userId,
-      authorName:
-        memoryStore.users.find((u) => u.id === userId)?.username ??
-        memoryStore.users.find((u) => u.id === userId)?.email ??
-        'User',
+      authorName: authorUser?.username ?? authorUser?.email ?? 'User',
+      authorAvatarUrl: authorUser?.avatarUrl ?? null,
       title,
       description,
       category,
@@ -841,6 +1128,9 @@ async function createPost({
         FROM users
         WHERE id = $1
       ) AS "authorName",
+      (
+        SELECT avatar_url FROM users WHERE id = $1
+      ) AS "authorAvatarUrl",
       title,
       description,
       category,
@@ -870,19 +1160,28 @@ async function findPostVisibleToUser(postId, userId) {
   if (!isPostgresEnabled()) {
     const post = memoryStore.posts.find((p) => p.id === postId);
     if (!post) return null;
+    const author = memoryStore.users.find((u) => u.id === post.userId);
+    const authorPrivate = Boolean(author?.isPrivate);
+    const followsAuthor = memoryStore.follows.some(
+      (f) => f.followerId === userId && f.followedId === post.userId,
+    );
     const visible =
-      post.userId === userId ||
-      memoryStore.follows.some((f) => f.followerId === userId && f.followedId === post.userId);
+      post.userId === userId || !authorPrivate || followsAuthor;
     return visible ? post : null;
   }
 
   const result = await query(
     `SELECT p.id, p.user_id AS "userId"
      FROM posts p
+     JOIN users u ON u.id = p.user_id
      WHERE p.id = $1
        AND (
          p.user_id = $2
-         OR p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = $2)
+         OR COALESCE(u.is_private, FALSE) = FALSE
+         OR EXISTS (
+           SELECT 1 FROM follows f
+           WHERE f.follower_id = $2 AND f.followed_id = p.user_id
+         )
        )
      LIMIT 1`,
     [postId, userId],
@@ -893,15 +1192,20 @@ async function findPostVisibleToUser(postId, userId) {
 async function likePost(postId, userId) {
   if (!isPostgresEnabled()) {
     const exists = memoryStore.postLikes.some((l) => l.postId === postId && l.userId === userId);
-    if (!exists) memoryStore.postLikes.push({ postId, userId, createdAt: new Date().toISOString() });
-    return;
+    if (exists) {
+      return false;
+    }
+    memoryStore.postLikes.push({ postId, userId, createdAt: new Date().toISOString() });
+    return true;
   }
-  await query(
+  const result = await query(
     `INSERT INTO post_likes (post_id, user_id)
      VALUES ($1, $2)
-     ON CONFLICT (post_id, user_id) DO NOTHING`,
+     ON CONFLICT (post_id, user_id) DO NOTHING
+     RETURNING post_id`,
     [postId, userId],
   );
+  return result.rowCount > 0;
 }
 
 async function unlikePost(postId, userId) {
@@ -945,6 +1249,7 @@ async function listPostComments(postId) {
           postId: c.postId,
           userId: c.userId,
           authorName,
+          authorAvatarUrl: user?.avatarUrl ?? null,
           comment: c.comment,
           createdAt: c.createdAt,
         };
@@ -957,6 +1262,7 @@ async function listPostComments(postId) {
       c.post_id AS "postId",
       c.user_id AS "userId",
       COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
       c.comment,
       c.created_at AS "createdAt"
     FROM post_comments c
@@ -975,14 +1281,20 @@ module.exports = {
   listConversationsByUser,
   listMessages,
   createMessage,
+  upsertConversationRead,
+  unreadMessagesCountForUser,
   updateConversationLastMessage,
   isUserInConversation,
   findConversationBetweenUsers,
   findConversationById,
   findConversationByIdForUser,
   createConversation,
+  listConversationParticipantIdsExcluding,
   listEvents,
   createEvent,
+  addEventParticipant,
+  listEventParticipants,
+  isUserEventParticipant,
   findEventById,
   updateEventById,
   deleteEventById,

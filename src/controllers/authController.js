@@ -50,8 +50,19 @@ async function deleteAccount(req, res, next) {
 async function updateProfile(req, res, next) {
   try {
     const userId = req.user?.id;
-    const { username } = req.body ?? {};
-    const payload = await authService.updateProfile({ userId, username });
+    const body = req.body ?? {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+    const payload = await authService.updateProfile({
+      userId,
+      username: body.username,
+      isPrivate: typeof body.isPrivate === 'boolean' ? body.isPrivate : undefined,
+      firstName: has('firstName') ? body.firstName : undefined,
+      lastName: has('lastName') ? body.lastName : undefined,
+      avatarUrl: has('avatarUrl') ? body.avatarUrl : undefined,
+      socialLinks: has('socialLinks') ? body.socialLinks : undefined,
+      tipsEnabled: typeof body.tipsEnabled === 'boolean' ? body.tipsEnabled : undefined,
+      tipsUrl: has('tipsUrl') ? body.tipsUrl : undefined,
+    });
     res.json(payload);
   } catch (error) {
     next(error);

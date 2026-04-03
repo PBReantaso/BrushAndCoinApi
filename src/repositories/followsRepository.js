@@ -69,17 +69,20 @@ async function follow(followerId, followedId) {
     const exists = memoryStore.follows.some(
       (f) => Number(f.followerId) === ids.followerId && Number(f.followedId) === ids.followedId,
     );
-    if (!exists) {
-      memoryStore.follows.push({ followerId: ids.followerId, followedId: ids.followedId });
+    if (exists) {
+      return false;
     }
-    return;
+    memoryStore.follows.push({ followerId: ids.followerId, followedId: ids.followedId });
+    return true;
   }
 
-  await query(
+  const result = await query(
     `INSERT INTO follows (follower_id, followed_id) VALUES ($1, $2)
-     ON CONFLICT (follower_id, followed_id) DO NOTHING`,
+     ON CONFLICT (follower_id, followed_id) DO NOTHING
+     RETURNING follower_id`,
     [ids.followerId, ids.followedId],
   );
+  return result.rowCount > 0;
 }
 
 async function listFollowers(profileUserId) {
@@ -154,6 +157,25 @@ async function listFollowing(profileUserId) {
   return result.rows;
 }
 
+async function listFollowerUserIds(followedId) {
+  const id = Number(followedId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return [];
+  }
+
+  if (!isPostgresEnabled()) {
+    return memoryStore.follows
+      .filter((f) => Number(f.followedId) === id)
+      .map((f) => Number(f.followerId));
+  }
+
+  const result = await query(
+    'SELECT follower_id AS id FROM follows WHERE followed_id = $1',
+    [id],
+  );
+  return result.rows.map((r) => Number(r.id));
+}
+
 async function unfollow(followerId, followedId) {
   const ids = _normalizeIds(followerId, followedId);
   if (!ids) {
@@ -186,4 +208,5 @@ module.exports = {
   unfollow,
   listFollowers,
   listFollowing,
+  listFollowerUserIds,
 };

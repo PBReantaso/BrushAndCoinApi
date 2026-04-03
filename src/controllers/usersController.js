@@ -48,7 +48,7 @@ async function getPosts(req, res, next) {
 
 async function getFollowers(req, res, next) {
   try {
-    const payload = await usersService.getFollowersList(req.params.id);
+    const payload = await usersService.getFollowersList(req.params.id, req.user);
     res.json(payload);
   } catch (error) {
     next(error);
@@ -57,7 +57,7 @@ async function getFollowers(req, res, next) {
 
 async function getFollowing(req, res, next) {
   try {
-    const payload = await usersService.getFollowingList(req.params.id);
+    const payload = await usersService.getFollowingList(req.params.id, req.user);
     res.json(payload);
   } catch (error) {
     next(error);

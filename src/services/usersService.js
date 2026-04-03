@@ -1,6 +1,7 @@
 const authRepository = require('../repositories/authRepository');
 const contentRepository = require('../repositories/contentRepository');
 const followsRepository = require('../repositories/followsRepository');
+const notificationsService = require('./notificationsService');
 
 async function searchUsers(rawQuery, currentUser) {
   const excludeUserId = Number(currentUser?.id) || 0;
@@ -36,12 +37,16 @@ async function getPublicProfile(userId, viewer) {
     isFollowing = await followsRepository.isFollowing(viewerId, id);
   }
 
+  const isPrivate = Boolean(user.isPrivate);
+  const isLocked = isPrivate && viewerId !== id && !isFollowing;
+
   return {
     user: {
       ...user,
       followerCount,
       followingCount,
       isFollowing,
+      isLocked,
     },
   };
 }
@@ -70,7 +75,10 @@ async function followUser(targetUserId, viewer) {
     error.statusCode = 404;
     throw error;
   }
-  await followsRepository.follow(viewerId, id);
+  const didInsert = await followsRepository.follow(viewerId, id);
+  if (didInsert) {
+    notificationsService.notifyNewFollower(id, viewer);
+  }
   const [followerCount, followingCount] = await Promise.all([
     followsRepository.followerCount(id),
     followsRepository.followingCount(id),
@@ -99,8 +107,9 @@ async function unfollowUser(targetUserId, viewer) {
   return { followerCount, followingCount, isFollowing: false };
 }
 
-async function getFollowersList(profileUserId) {
+async function getFollowersList(profileUserId, viewer) {
   const id = Number(profileUserId);
+  const viewerId = Number(viewer?.id) || 0;
   if (!Number.isFinite(id) || id <= 0) {
     const error = new Error('Invalid user id.');
     error.statusCode = 400;
@@ -110,14 +119,24 @@ async function getFollowersList(profileUserId) {
   if (!exists) {
     const error = new Error('User not found.');
     error.statusCode = 404;
+    throw error;
+  }
+  if (
+    id !== viewerId
+    && (await authRepository.isUserPrivate(id))
+    && !(await followsRepository.isFollowing(viewerId, id))
+  ) {
+    const error = new Error('This list is only visible to followers.');
+    error.statusCode = 403;
     throw error;
   }
   const users = await followsRepository.listFollowers(id);
   return { users };
 }
 
-async function getFollowingList(profileUserId) {
+async function getFollowingList(profileUserId, viewer) {
   const id = Number(profileUserId);
+  const viewerId = Number(viewer?.id) || 0;
   if (!Number.isFinite(id) || id <= 0) {
     const error = new Error('Invalid user id.');
     error.statusCode = 400;
@@ -127,6 +146,15 @@ async function getFollowingList(profileUserId) {
   if (!exists) {
     const error = new Error('User not found.');
     error.statusCode = 404;
+    throw error;
+  }
+  if (
+    id !== viewerId
+    && (await authRepository.isUserPrivate(id))
+    && !(await followsRepository.isFollowing(viewerId, id))
+  ) {
+    const error = new Error('This list is only visible to followers.');
+    error.statusCode = 403;
     throw error;
   }
   const users = await followsRepository.listFollowing(id);

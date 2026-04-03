@@ -1,4 +1,7 @@
+const authRepository = require('../repositories/authRepository');
 const contentRepository = require('../repositories/contentRepository');
+const followsRepository = require('../repositories/followsRepository');
+const notificationsService = require('./notificationsService');
 
 async function getDashboard() {
   const projects = await contentRepository.listProjects();
@@ -35,7 +38,18 @@ async function getConversationMessages(conversationId, user) {
   }
 
   const messages = await contentRepository.listMessages(conversationId);
+  await contentRepository.upsertConversationRead(conversationId, user.id);
   return { messages };
+}
+
+async function getUnreadMessagesCount(user) {
+  if (!user?.id) {
+    const error = new Error('User not authenticated.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const count = await contentRepository.unreadMessagesCountForUser(user.id);
+  return { count };
 }
 
 async function sendMessage(conversationId, input, user) {
@@ -68,6 +82,17 @@ async function sendMessage(conversationId, input, user) {
   // Update conversation's last message
   await contentRepository.updateConversationLastMessage(conversationId, content);
 
+  const recipientIds = await contentRepository.listConversationParticipantIdsExcluding(
+    conversationId,
+    user.id,
+  );
+  notificationsService.notifyNewMessage(recipientIds, user, content, {
+    conversationId: Number(conversationId),
+  });
+  notificationsService.notifyMentionsInText(content, user, 'message', {
+    conversationId: Number(conversationId),
+  });
+
   return { message };
 }
 
@@ -77,6 +102,18 @@ async function startConversation(input, user) {
     const error = new Error('Other user ID is required.');
     error.statusCode = 400;
     throw error;
+  }
+
+  const viewerId = Number(user?.id);
+  if ((await authRepository.isUserPrivate(otherUserId)) && viewerId !== otherUserId) {
+    const allowed = await followsRepository.isFollowing(viewerId, otherUserId);
+    if (!allowed) {
+      const error = new Error(
+        'This account is private. Follow them to send a message.',
+      );
+      error.statusCode = 403;
+      throw error;
+    }
   }
 
   // Check if conversation already exists
@@ -126,6 +163,10 @@ async function createEvent(input, user) {
     createdBy: user?.id ?? null,
   });
 
+  if (user?.id) {
+    notificationsService.notifyFollowersNewEvent(user, created);
+  }
+
   return { event: created };
 }
 
@@ -173,6 +214,10 @@ async function updateEvent(eventId, input, user) {
     schedules: Array.isArray(input?.schedules) ? input.schedules : existing.schedules ?? [],
   });
 
+  if (user?.id) {
+    notificationsService.notifyFollowersEventUpdated(user, updated);
+  }
+
   return { event: updated };
 }
 
@@ -198,6 +243,57 @@ async function deleteEvent(eventId, user) {
 
   await contentRepository.deleteEventById(id);
   return { success: true };
+}
+
+async function getEventParticipants(eventId, user) {
+  const id = Number(eventId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid event id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const event = await contentRepository.findEventById(id);
+  if (!event) {
+    const error = new Error('Event not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const viewerId = Number(user?.id) || 0;
+  const participants = await contentRepository.listEventParticipants(id);
+  const joinedByMe = viewerId > 0 && participants.some((p) => Number(p.userId) === viewerId);
+  return { participants, joinedByMe };
+}
+
+async function joinEvent(eventId, user) {
+  const id = Number(eventId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid event id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const viewerId = Number(user?.id);
+  if (!Number.isFinite(viewerId) || viewerId <= 0) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const event = await contentRepository.findEventById(id);
+  if (!event) {
+    const error = new Error('Event not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (Number(event.createdBy) === viewerId) {
+    const error = new Error('Organizers are already listed as participants.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const already = await contentRepository.isUserEventParticipant(id, viewerId);
+  if (already) {
+    return { success: true, alreadyJoined: true };
+  }
+  await contentRepository.addEventParticipant(id, viewerId);
+  return { success: true, alreadyJoined: false };
 }
 
 async function getFeedPosts(user) {
@@ -255,6 +351,9 @@ async function createPost(input, user) {
     imageUrl: input?.imageUrl == null ? null : String(input.imageUrl),
   });
 
+  const mentionText = `${title}\n${String(input?.description ?? '')}`;
+  notificationsService.notifyMentionsInText(mentionText, user, 'post', { postId: post.id });
+
   return { post };
 }
 
@@ -272,7 +371,11 @@ async function likePost(postId, user) {
     error.statusCode = 404;
     throw error;
   }
-  await contentRepository.likePost(id, userId);
+  const inserted = await contentRepository.likePost(id, userId);
+  if (inserted) {
+    const ownerId = visible.userId;
+    notificationsService.notifyPostLiked(ownerId, user, id);
+  }
   return { success: true };
 }
 
@@ -315,6 +418,8 @@ async function commentOnPost(postId, input, user) {
     throw error;
   }
   await contentRepository.addPostComment(id, userId, comment);
+  notificationsService.notifyPostComment(visible.userId, user, id);
+  notificationsService.notifyMentionsInText(comment, user, 'comment', { postId: id });
   return { success: true };
 }
 
@@ -342,12 +447,15 @@ module.exports = {
   getProjects,
   getMessages,
   getConversationMessages,
+  getUnreadMessagesCount,
   startConversation,
   sendMessage,
   getEvents,
   createEvent,
   updateEvent,
   deleteEvent,
+  getEventParticipants,
+  joinEvent,
   getFeedPosts,
   getMyPosts,
   getTaggedPosts,

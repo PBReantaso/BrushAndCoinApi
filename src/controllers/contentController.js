@@ -36,6 +36,15 @@ async function messages(req, res, next) {
   }
 }
 
+async function unreadMessagesCount(req, res, next) {
+  try {
+    const payload = await contentService.getUnreadMessagesCount(req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getConversationMessages(req, res, next) {
   try {
     const conversationId = Number(req.params.id);
@@ -100,6 +109,24 @@ async function deleteEvent(req, res, next) {
   try {
     const payload = await contentService.deleteEvent(req.params.id, req.user);
     res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function eventParticipants(req, res, next) {
+  try {
+    const payload = await contentService.getEventParticipants(req.params.id, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function joinEvent(req, res, next) {
+  try {
+    const payload = await contentService.joinEvent(req.params.id, req.user);
+    res.status(201).json(payload);
   } catch (error) {
     next(error);
   }
@@ -182,6 +209,7 @@ module.exports = {
   artists,
   projects,
   messages,
+  unreadMessagesCount,
   getConversationMessages,
   sendMessage,
   startConversation,
@@ -189,6 +217,8 @@ module.exports = {
   createEvent,
   updateEvent,
   deleteEvent,
+  eventParticipants,
+  joinEvent,
   feedPosts,
   myPosts,
   taggedPosts,

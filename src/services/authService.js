@@ -4,6 +4,25 @@ const bcrypt = require('bcryptjs');
 const tokenService = require('./tokenService');
 
 const USERNAME_MAX_LEN = 48;
+const NAME_MAX_LEN = 80;
+const AVATAR_URL_MAX_LEN = 400000;
+const TIPS_URL_MAX_LEN = 2000;
+const SOCIAL_LINK_MAX_LEN = 500;
+
+function sanitizeSocialLinksBody(raw) {
+  const d = { facebook: '', instagram: '', twitter: '', website: '' };
+  if (!raw || typeof raw !== 'object') {
+    return d;
+  }
+  for (const k of Object.keys(d)) {
+    let v = String(raw[k] ?? '').trim();
+    if (v.length > SOCIAL_LINK_MAX_LEN) {
+      v = v.slice(0, SOCIAL_LINK_MAX_LEN);
+    }
+    d[k] = v;
+  }
+  return d;
+}
 
 function baseUsernameFromEmail(email) {
   const local = String(email).split('@')[0] || 'user';
@@ -136,39 +155,120 @@ async function me(user) {
       id: dbUser?.id ?? userId,
       email: dbUser?.email ?? user.email,
       username: dbUser?.username ?? user.username ?? '',
+      firstName: dbUser?.firstName != null ? String(dbUser.firstName) : '',
+      lastName: dbUser?.lastName != null ? String(dbUser.lastName) : '',
+      avatarUrl: dbUser?.avatarUrl ?? null,
+      socialLinks: sanitizeSocialLinksBody(dbUser?.socialLinks),
+      tipsEnabled: Boolean(dbUser?.tipsEnabled),
+      tipsUrl: dbUser?.tipsUrl ?? null,
+      isPrivate: Boolean(dbUser?.isPrivate),
       followerCount,
       followingCount,
     },
   };
 }
 
-async function updateProfile({ userId, username }) {
+async function updateProfile({
+  userId,
+  username,
+  isPrivate,
+  firstName,
+  lastName,
+  avatarUrl,
+  socialLinks,
+  tipsEnabled,
+  tipsUrl,
+}) {
   if (!userId) {
     const error = new Error('Authentication required.');
     error.statusCode = 401;
     throw error;
   }
-  const nextUsername = String(username ?? '').trim();
-  if (!nextUsername) {
-    const error = new Error('Username is required.');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (nextUsername.length > USERNAME_MAX_LEN) {
-    const error = new Error(`Username must be at most ${USERNAME_MAX_LEN} characters.`);
+
+  const hasUsername = username != null && String(username).trim() !== '';
+  const hasPrivate = typeof isPrivate === 'boolean';
+  const hasFirstName = firstName !== undefined;
+  const hasLastName = lastName !== undefined;
+  const hasAvatarUrl = avatarUrl !== undefined;
+  const hasSocialLinks = socialLinks !== undefined;
+  const hasTipsEnabled = typeof tipsEnabled === 'boolean';
+  const hasTipsUrl = tipsUrl !== undefined;
+
+  if (
+    !hasUsername &&
+    !hasPrivate &&
+    !hasFirstName &&
+    !hasLastName &&
+    !hasAvatarUrl &&
+    !hasSocialLinks &&
+    !hasTipsEnabled &&
+    !hasTipsUrl
+  ) {
+    const error = new Error(
+      'Provide at least one profile field to update.',
+    );
     error.statusCode = 400;
     throw error;
   }
 
-  const taken = await authRepository.findUserIdByUsernameKey(nextUsername, userId);
-  if (taken) {
-    const error = new Error('Username is already taken.');
-    error.statusCode = 409;
+  const dbUser = await authRepository.findUserById(userId);
+  if (!dbUser) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  let nextUsername = String(dbUser.username ?? '').trim();
+  if (hasUsername) {
+    nextUsername = String(username).trim();
+    if (!nextUsername) {
+      const error = new Error('Username cannot be empty.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (nextUsername.length > USERNAME_MAX_LEN) {
+      const error = new Error(`Username must be at most ${USERNAME_MAX_LEN} characters.`);
+      error.statusCode = 400;
+      throw error;
+    }
+    const taken = await authRepository.findUserIdByUsernameKey(nextUsername, userId);
+    if (taken) {
+      const error = new Error('Username is already taken.');
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+
+  if (hasFirstName && String(firstName).length > NAME_MAX_LEN) {
+    const error = new Error(`First name must be at most ${NAME_MAX_LEN} characters.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (hasLastName && String(lastName).length > NAME_MAX_LEN) {
+    const error = new Error(`Last name must be at most ${NAME_MAX_LEN} characters.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (hasAvatarUrl && avatarUrl != null && String(avatarUrl).length > AVATAR_URL_MAX_LEN) {
+    const error = new Error('Profile photo is too large. Try a smaller image.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (hasTipsUrl && tipsUrl != null && String(tipsUrl).length > TIPS_URL_MAX_LEN) {
+    const error = new Error(`Tips link must be at most ${TIPS_URL_MAX_LEN} characters.`);
+    error.statusCode = 400;
     throw error;
   }
 
   const updated = await authRepository.updateUserProfileById(userId, {
-    username: nextUsername,
+    username: hasUsername ? nextUsername : undefined,
+    isPrivate: hasPrivate ? isPrivate : undefined,
+    firstName: hasFirstName ? String(firstName).trim() : undefined,
+    lastName: hasLastName ? String(lastName).trim() : undefined,
+    avatarUrl: hasAvatarUrl ? avatarUrl : undefined,
+    socialLinks: hasSocialLinks ? sanitizeSocialLinksBody(socialLinks) : undefined,
+    tipsEnabled: hasTipsEnabled ? tipsEnabled : undefined,
+    tipsUrl: hasTipsUrl ? tipsUrl : undefined,
   });
   if (!updated) {
     const error = new Error('User not found.');

@@ -3,7 +3,15 @@ const memoryStore = {
     {
       id: 1,
       email: 'demo@brushandcoin.com',
+      username: 'demo',
       password: 'password123',
+      isPrivate: false,
+      firstName: '',
+      lastName: '',
+      avatarUrl: null,
+      socialLinks: { facebook: '', instagram: '', twitter: '', website: '' },
+      tipsEnabled: false,
+      tipsUrl: null,
     },
   ],
   artists: [
@@ -63,6 +71,15 @@ const memoryStore = {
   posts: [],
   postLikes: [],
   postComments: [],
+  /** @type {{ id: number, conversationId: number, senderId: number, content: string, createdAt: string }[]} */
+  messages: [],
+  /** @type {{ conversationId: number, userId: number, lastReadAt: string }[]} */
+  conversationReads: [],
+  notifications: [],
+  pushDevices: [],
+  commissions: [],
+  /** @type {{ eventId: number, userId: number, joinedAt: string }[]} */
+  eventParticipants: [{ eventId: 1, userId: 1, joinedAt: new Date().toISOString() }],
 };
 
 module.exports = { memoryStore };
