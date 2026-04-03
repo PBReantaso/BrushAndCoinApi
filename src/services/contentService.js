@@ -212,6 +212,23 @@ async function getMyPosts(user) {
   return { posts };
 }
 
+async function getTaggedPosts(rawTag, user) {
+  const userId = Number(user?.id);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const tag = String(rawTag ?? '').trim();
+  if (!tag) {
+    const error = new Error('Tag is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const posts = await contentRepository.listPostsByTag(userId, tag);
+  return { posts };
+}
+
 async function createPost(input, user) {
   const userId = Number(user?.id);
   if (!Number.isFinite(userId) || userId <= 0) {
@@ -333,6 +350,7 @@ module.exports = {
   deleteEvent,
   getFeedPosts,
   getMyPosts,
+  getTaggedPosts,
   createPost,
   likePost,
   unlikePost,

@@ -548,6 +548,10 @@ async function deleteEventById(eventId) {
   await query('DELETE FROM events WHERE id = $1', [eventId]);
 }
 
+function _normalizeTag(rawTag) {
+  return String(rawTag ?? '').trim().replace(/^#/, '').toLowerCase();
+}
+
 async function listFeedPosts(userId) {
   if (!isPostgresEnabled()) {
     const followed = new Set(
@@ -605,6 +609,79 @@ async function listFeedPosts(userId) {
       )
     ORDER BY p.created_at DESC`,
     [userId],
+  );
+  return result.rows;
+}
+
+async function listPostsByTag(userId, rawTag) {
+  const tag = _normalizeTag(rawTag);
+  if (!tag) return [];
+
+  if (!isPostgresEnabled()) {
+    const followed = new Set(
+      memoryStore.follows
+        .filter((f) => Number(f.followerId) === Number(userId))
+        .map((f) => Number(f.followedId)),
+    );
+    return memoryStore.posts
+      .filter((p) => Number(p.userId) === Number(userId) || followed.has(Number(p.userId)))
+      .filter((p) => {
+        const tags = Array.isArray(p.tags) ? p.tags : [];
+        return tags.some((t) => _normalizeTag(t) === tag);
+      })
+      .map((p) => {
+        const likeCount = memoryStore.postLikes.filter((l) => l.postId === p.id).length;
+        const commentCount = memoryStore.postComments.filter((c) => c.postId === p.id).length;
+        const likedByMe = memoryStore.postLikes.some(
+          (l) => l.postId === p.id && l.userId === userId,
+        );
+        return { ...p, likeCount, commentCount, likedByMe };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  const result = await query(
+    `SELECT
+      p.id,
+      p.user_id AS "userId",
+      COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      p.title,
+      p.description,
+      p.category,
+      p.price,
+      p.is_commission_available AS "isCommissionAvailable",
+      p.tags,
+      p.image_url AS "imageUrl",
+      p.created_at AS "createdAt",
+      COALESCE(lc.like_count, 0)::int AS "likeCount",
+      COALESCE(cc.comment_count, 0)::int AS "commentCount",
+      EXISTS(
+        SELECT 1 FROM post_likes pl
+        WHERE pl.post_id = p.id AND pl.user_id = $1
+      ) AS "likedByMe"
+    FROM posts p
+    JOIN users u ON u.id = p.user_id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS like_count
+      FROM post_likes
+      GROUP BY post_id
+    ) lc ON lc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS comment_count
+      FROM post_comments
+      GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    WHERE (
+      p.user_id = $1
+      OR p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = $1)
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements_text(COALESCE(p.tags, '[]'::jsonb)) AS tag_item
+      WHERE LOWER(TRIM(LEADING '#' FROM tag_item)) = $2
+    )
+    ORDER BY p.created_at DESC`,
+    [userId, tag],
   );
   return result.rows;
 }
@@ -911,6 +988,7 @@ module.exports = {
   deleteEventById,
   listFeedPosts,
   listMyPosts,
+  listPostsByTag,
   listPostsForProfile,
   createPost,
   findPostVisibleToUser,

@@ -123,6 +123,15 @@ async function myPosts(req, res, next) {
   }
 }
 
+async function taggedPosts(req, res, next) {
+  try {
+    const payload = await contentService.getTaggedPosts(req.query.tag, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createPost(req, res, next) {
   try {
     const payload = await contentService.createPost(req.body ?? {}, req.user);
@@ -182,6 +191,7 @@ module.exports = {
   deleteEvent,
   feedPosts,
   myPosts,
+  taggedPosts,
   createPost,
   likePost,
   unlikePost,
