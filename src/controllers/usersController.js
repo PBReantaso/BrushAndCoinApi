@@ -46,10 +46,30 @@ async function getPosts(req, res, next) {
   }
 }
 
+async function getFollowers(req, res, next) {
+  try {
+    const payload = await usersService.getFollowersList(req.params.id);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getFollowing(req, res, next) {
+  try {
+    const payload = await usersService.getFollowingList(req.params.id);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   search,
   getProfile,
   getPosts,
   follow,
   unfollow,
+  getFollowers,
+  getFollowing,
 };

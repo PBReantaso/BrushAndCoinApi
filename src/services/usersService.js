@@ -99,6 +99,40 @@ async function unfollowUser(targetUserId, viewer) {
   return { followerCount, followingCount, isFollowing: false };
 }
 
+async function getFollowersList(profileUserId) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid user id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const exists = await authRepository.findPublicUserById(id);
+  if (!exists) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const users = await followsRepository.listFollowers(id);
+  return { users };
+}
+
+async function getFollowingList(profileUserId) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid user id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const exists = await authRepository.findPublicUserById(id);
+  if (!exists) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const users = await followsRepository.listFollowing(id);
+  return { users };
+}
+
 async function getUserPosts(profileUserId, viewer) {
   const id = Number(profileUserId);
   if (!Number.isFinite(id) || id <= 0) {
@@ -123,4 +157,6 @@ module.exports = {
   getUserPosts,
   followUser,
   unfollowUser,
+  getFollowersList,
+  getFollowingList,
 };

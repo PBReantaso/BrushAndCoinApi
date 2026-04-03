@@ -82,6 +82,78 @@ async function follow(followerId, followedId) {
   );
 }
 
+async function listFollowers(profileUserId) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return [];
+  }
+
+  if (!isPostgresEnabled()) {
+    const followerIds = memoryStore.follows
+      .filter((f) => Number(f.followedId) === id)
+      .map((f) => Number(f.followerId));
+    const out = [];
+    for (const fid of followerIds) {
+      const u = memoryStore.users.find((x) => Number(x.id) === fid);
+      if (u) {
+        out.push({
+          id: u.id,
+          username: u.username || String(u.email || 'user').split('@')[0],
+        });
+      }
+    }
+    out.sort((a, b) => String(a.username).localeCompare(String(b.username)));
+    return out;
+  }
+
+  const result = await query(
+    `SELECT u.id,
+            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username
+     FROM follows f
+     INNER JOIN users u ON u.id = f.follower_id
+     WHERE f.followed_id = $1
+     ORDER BY username ASC`,
+    [id],
+  );
+  return result.rows;
+}
+
+async function listFollowing(profileUserId) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return [];
+  }
+
+  if (!isPostgresEnabled()) {
+    const followedIds = memoryStore.follows
+      .filter((f) => Number(f.followerId) === id)
+      .map((f) => Number(f.followedId));
+    const out = [];
+    for (const fid of followedIds) {
+      const u = memoryStore.users.find((x) => Number(x.id) === fid);
+      if (u) {
+        out.push({
+          id: u.id,
+          username: u.username || String(u.email || 'user').split('@')[0],
+        });
+      }
+    }
+    out.sort((a, b) => String(a.username).localeCompare(String(b.username)));
+    return out;
+  }
+
+  const result = await query(
+    `SELECT u.id,
+            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username
+     FROM follows f
+     INNER JOIN users u ON u.id = f.followed_id
+     WHERE f.follower_id = $1
+     ORDER BY username ASC`,
+    [id],
+  );
+  return result.rows;
+}
+
 async function unfollow(followerId, followedId) {
   const ids = _normalizeIds(followerId, followedId);
   if (!ids) {
@@ -112,4 +184,6 @@ module.exports = {
   isFollowing,
   follow,
   unfollow,
+  listFollowers,
+  listFollowing,
 };
