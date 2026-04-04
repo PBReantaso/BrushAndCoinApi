@@ -29,7 +29,7 @@ async function projects(req, res, next) {
 
 async function commissions(req, res, next) {
   try {
-    const payload = await contentService.getCommissions();
+    const payload = await contentService.getCommissions(req.user);
     res.json(payload);
   } catch (error) {
     next(error);
@@ -49,7 +49,7 @@ async function updateCommissionStatus(req, res, next) {
   try {
     const commissionId = Number(req.params.id);
     const status = String(req.body?.status ?? '').trim();
-    const payload = await contentService.updateCommissionStatus(commissionId, status);
+    const payload = await contentService.updateCommissionStatus(commissionId, status, req.user);
     res.json(payload);
   } catch (error) {
     next(error);

@@ -18,6 +18,8 @@ function mapRow(row) {
     title: row.title,
     clientName: row.client_name ?? row.clientName,
     description: row.description ?? '',
+    lastMessage: row.last_message ?? row.lastMessage,
+    hasUnreadMessages: Boolean(row.hasUnreadMessages || row.unreadMessages || row.hasNewMessages),
     budget: Number(row.budget ?? 0),
     deadline: row.deadline ?? null,
     specialRequirements: row.special_requirements ?? row.specialRequirements ?? '',
@@ -25,6 +27,7 @@ function mapRow(row) {
     referenceImages: images,
     totalAmount: Number(row.total_amount ?? row.totalAmount ?? 0),
     status: row.status,
+    milestones: Array.isArray(row.milestones) ? row.milestones : [],
     createdAt: row.created_at ?? row.createdAt,
   };
 }
@@ -35,8 +38,10 @@ function toApiCommission(m) {
     title: m.title,
     clientName: m.clientName,
     status: m.status,
-    milestones: [],
+    milestones: Array.isArray(m.milestones) ? m.milestones : [],
     description: m.description,
+    lastMessage: m.lastMessage ?? null,
+    hasUnreadMessages: Boolean(m.hasUnreadMessages),
     budget: m.budget,
     deadline: m.deadline,
     specialRequirements: m.specialRequirements,
@@ -65,6 +70,8 @@ async function listCommissionsForUser(userId) {
       title,
       client_name AS "clientName",
       description,
+      last_message AS "lastMessage",
+      has_unread_messages AS "hasUnreadMessages",
       budget,
       deadline,
       special_requirements AS "specialRequirements",
@@ -98,6 +105,8 @@ async function findCommissionById(id) {
       title,
       client_name AS "clientName",
       description,
+      last_message AS "lastMessage",
+      has_unread_messages AS "hasUnreadMessages",
       budget,
       deadline,
       special_requirements AS "specialRequirements",
@@ -215,7 +224,7 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
   }
 
   const current = String(existing.status);
-  const nextAllowed = allowedNext[current] || [];
+  const nextAllowed = ALLOWED[current] || [];
   if (!nextAllowed.includes(status)) {
     return { ok: false, reason: 'invalid_transition' };
   }
@@ -235,6 +244,8 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
       title,
       client_name AS "clientName",
       description,
+      last_message AS "lastMessage",
+      has_unread_messages AS "hasUnreadMessages",
       budget,
       deadline,
       special_requirements AS "specialRequirements",

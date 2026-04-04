@@ -222,11 +222,31 @@ async function listConversationsByUser(userId) {
           }
         }
 
+        const conversationMessages = (memoryStore.messages || []).filter(
+          (m) => Number(m.conversationId) === conversationId,
+        );
+        const lastMessageEntry = conversationMessages.length > 0
+          ? conversationMessages.reduce((a, b) =>
+              new Date(a.createdAt).getTime() >= new Date(b.createdAt).getTime() ? a : b,
+            )
+          : null;
+        const readEntry = (memoryStore.conversationReads || []).find(
+          (r) => Number(r.conversationId) === conversationId && Number(r.userId) === userId,
+        );
+        const hasUnreadMessages = Boolean(
+          lastMessageEntry &&
+            Number(lastMessageEntry.senderId) !== userId &&
+            (!readEntry ||
+              new Date(lastMessageEntry.createdAt).getTime() >
+                new Date(readEntry.lastReadAt).getTime()),
+        );
+
         return {
           id: conversation.id,
           name: otherName,
           lastMessage: conversation.lastMessage,
           lastMessageDate: conversation.lastMessageDate,
+          hasUnreadMessages,
         };
       })
       .filter((item) => item != null);
@@ -238,15 +258,40 @@ async function listConversationsByUser(userId) {
   }
 
   const result = await query(
-    `SELECT DISTINCT
+    `WITH last_per_conv AS (
+      SELECT DISTINCT ON (conversation_id)
+        conversation_id,
+        sender_id,
+        created_at
+      FROM messages
+      ORDER BY conversation_id, created_at DESC
+    )
+    SELECT DISTINCT
       c.id,
       COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1), c.name) AS name,
       c.last_message AS "lastMessage",
-      c.last_message_date AS "lastMessageDate"
+      c.last_message_date AS "lastMessageDate",
+      CASE
+        WHEN lp.sender_id IS NOT NULL
+          AND lp.sender_id <> $1
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM conversation_reads cr
+              WHERE cr.conversation_id = c.id AND cr.user_id = $1
+            )
+            OR lp.created_at > (
+              SELECT cr.last_read_at FROM conversation_reads cr
+              WHERE cr.conversation_id = c.id AND cr.user_id = $1
+            )
+          )
+        THEN true
+        ELSE false
+      END AS "hasUnreadMessages"
     FROM conversations c
     INNER JOIN conversation_participants cp_me ON c.id = cp_me.conversation_id AND cp_me.user_id = $1
     INNER JOIN conversation_participants cp_other ON c.id = cp_other.conversation_id AND cp_other.user_id != $1
     INNER JOIN users u_other ON u_other.id = cp_other.user_id
+    LEFT JOIN last_per_conv lp ON lp.conversation_id = c.id
     WHERE NOT EXISTS (
       SELECT 1 FROM conversation_participants cp_check
       WHERE cp_check.conversation_id = c.id
