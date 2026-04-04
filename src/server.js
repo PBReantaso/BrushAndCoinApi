@@ -12,9 +12,9 @@ async function startServer() {
     }
   }
 
-  app.listen(env.port, () => {
+  app.listen(env.port, '0.0.0.0', () => {
     const storage = isPostgresEnabled() ? 'PostgreSQL' : 'in-memory fallback';
-    console.log(`BrushAndCoin API running on http://localhost:${env.port} (${storage})`);
+    console.log(`BrushAndCoin API running on http://0.0.0.0:${env.port} (${storage})`);
   });
 }
 
