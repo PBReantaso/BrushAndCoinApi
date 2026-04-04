@@ -6,7 +6,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "migrate": "node scripts/run-migrations.js"
+    "migrate": "node scripts/migrator.js",
+    "migrate:legacy": "node scripts/run-migrations.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
