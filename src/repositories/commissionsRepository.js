@@ -18,6 +18,7 @@ function mapRow(row) {
     id: row.id,
     patronId: row.patron_id ?? row.patronId,
     artistId: row.artist_id ?? row.artistId,
+    artistUsername: row.artist_username ?? row.artistUsername ?? null,
     title: row.title,
     clientName: row.client_name ?? row.clientName,
     description: row.description ?? '',
@@ -36,6 +37,7 @@ function mapRow(row) {
     createdAt: row.created_at ?? row.createdAt,
     lastMessageAt: row.last_message_at ?? row.lastMessageAt ?? null,
     completedAt: row.completed_at ?? row.completedAt ?? null,
+    submissionRound: Number(row.submission_round ?? row.submissionRound ?? 0),
   };
 }
 
@@ -50,6 +52,7 @@ function toApiCommission(m) {
     id: m.id,
     patronId: m.patronId,
     artistId: m.artistId,
+    artistUsername: m.artistUsername ?? null,
     title: m.title,
     clientName: m.clientName,
     status: m.status,
@@ -66,6 +69,7 @@ function toApiCommission(m) {
     createdAt: toIso(m.createdAt),
     lastMessageAt: toIso(m.lastMessageAt),
     completedAt: toIso(m.completedAt),
+    submissionRound: Number(m.submissionRound ?? 0),
   };
 }
 
@@ -78,8 +82,17 @@ async function listCommissionsForUser(userId) {
       .filter((c) => Number(c.patronId) === uid || Number(c.artistId) === uid)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .map((c) => {
+        const artist = memoryStore.users.find((u) => Number(u.id) === Number(c.artistId));
+        const artistUsername = artist
+          ? String(artist.username || '').trim() ||
+            String(artist.email || '')
+              .split('@')[0]
+              .trim() ||
+            null
+          : null;
         const row = {
           ...c,
+          artistUsername,
           hasUnreadMessages:
             Number(c.artistId) === uid ? Boolean(c.unreadForArtist) : Boolean(c.unreadForPatron),
         };
@@ -89,32 +102,35 @@ async function listCommissionsForUser(userId) {
 
   const result = await query(
     `SELECT
-      id,
-      patron_id AS "patronId",
-      artist_id AS "artistId",
-      title,
-      client_name AS "clientName",
-      description,
-      last_message AS "lastMessage",
+      c.id,
+      c.patron_id AS "patronId",
+      c.artist_id AS "artistId",
+      COALESCE(NULLIF(TRIM(ua.username), ''), split_part(ua.email, '@', 1), 'Artist') AS "artistUsername",
+      c.title,
+      c.client_name AS "clientName",
+      c.description,
+      c.last_message AS "lastMessage",
       CASE
-        WHEN artist_id = $1 THEN unread_for_artist
-        ELSE unread_for_patron
+        WHEN c.artist_id = $1 THEN c.unread_for_artist
+        ELSE c.unread_for_patron
       END AS "hasUnreadMessages",
-      budget,
-      deadline,
-      special_requirements AS "specialRequirements",
-      is_urgent AS "isUrgent",
-      reference_images AS "referenceImages",
-      total_amount AS "totalAmount",
-      status,
-      created_at AS "createdAt",
-      last_message_at AS "lastMessageAt",
-      completed_at AS "completedAt",
-      unread_for_artist AS "unreadForArtist",
-      unread_for_patron AS "unreadForPatron"
-    FROM commissions
-    WHERE patron_id = $1 OR artist_id = $1
-    ORDER BY created_at DESC, id DESC`,
+      c.budget,
+      c.deadline,
+      c.special_requirements AS "specialRequirements",
+      c.is_urgent AS "isUrgent",
+      c.reference_images AS "referenceImages",
+      c.total_amount AS "totalAmount",
+      c.status,
+      c.created_at AS "createdAt",
+      c.last_message_at AS "lastMessageAt",
+      c.completed_at AS "completedAt",
+      c.unread_for_artist AS "unreadForArtist",
+      c.unread_for_patron AS "unreadForPatron",
+      c.submission_round AS "submissionRound"
+    FROM commissions c
+    INNER JOIN users ua ON ua.id = c.artist_id
+    WHERE c.patron_id = $1 OR c.artist_id = $1
+    ORDER BY c.created_at DESC, c.id DESC`,
     [uid],
   );
   return result.rows.map((r) => toApiCommission(mapRow(r)));
@@ -126,31 +142,44 @@ async function findCommissionById(id) {
 
   if (!isPostgresEnabled()) {
     const m = memoryStore.commissions.find((c) => Number(c.id) === cid);
-    return m ? { ...m } : null;
+    if (!m) return null;
+    const artist = memoryStore.users.find((u) => Number(u.id) === Number(m.artistId));
+    const artistUsername = artist
+      ? String(artist.username || '').trim() ||
+        String(artist.email || '')
+          .split('@')[0]
+          .trim() ||
+        null
+      : null;
+    return { ...m, artistUsername };
   }
 
   const result = await query(
     `SELECT
-      id,
-      patron_id AS "patronId",
-      artist_id AS "artistId",
-      title,
-      client_name AS "clientName",
-      description,
-      last_message AS "lastMessage",
-      budget,
-      deadline,
-      special_requirements AS "specialRequirements",
-      is_urgent AS "isUrgent",
-      reference_images AS "referenceImages",
-      total_amount AS "totalAmount",
-      status,
-      created_at AS "createdAt",
-      last_message_at AS "lastMessageAt",
-      completed_at AS "completedAt",
-      unread_for_artist AS "unreadForArtist",
-      unread_for_patron AS "unreadForPatron"
-    FROM commissions WHERE id = $1 LIMIT 1`,
+      c.id,
+      c.patron_id AS "patronId",
+      c.artist_id AS "artistId",
+      COALESCE(NULLIF(TRIM(ua.username), ''), split_part(ua.email, '@', 1), 'Artist') AS "artistUsername",
+      c.title,
+      c.client_name AS "clientName",
+      c.description,
+      c.last_message AS "lastMessage",
+      c.budget,
+      c.deadline,
+      c.special_requirements AS "specialRequirements",
+      c.is_urgent AS "isUrgent",
+      c.reference_images AS "referenceImages",
+      c.total_amount AS "totalAmount",
+      c.status,
+      c.created_at AS "createdAt",
+      c.last_message_at AS "lastMessageAt",
+      c.completed_at AS "completedAt",
+      c.unread_for_artist AS "unreadForArtist",
+      c.unread_for_patron AS "unreadForPatron",
+      c.submission_round AS "submissionRound"
+    FROM commissions c
+    INNER JOIN users ua ON ua.id = c.artist_id
+    WHERE c.id = $1 LIMIT 1`,
     [cid],
   );
   return mapRow(result.rows[0]) || null;
@@ -200,6 +229,7 @@ async function createCommission(data) {
       unreadForPatron: false,
       lastMessageAt: null,
       completedAt: null,
+      submissionRound: 0,
     };
     memoryStore.commissions.push(m);
     return m;
@@ -215,6 +245,8 @@ async function createCommission(data) {
       id,
       patron_id AS "patronId",
       artist_id AS "artistId",
+      (SELECT COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1), 'Artist')
+       FROM users u WHERE u.id = artist_id LIMIT 1) AS "artistUsername",
       title,
       client_name AS "clientName",
       description,
@@ -229,7 +261,8 @@ async function createCommission(data) {
       last_message_at AS "lastMessageAt",
       completed_at AS "completedAt",
       unread_for_artist AS "unreadForArtist",
-      unread_for_patron AS "unreadForPatron"`,
+      unread_for_patron AS "unreadForPatron",
+      submission_round AS "submissionRound"`,
     [
       patronId,
       artistId,
@@ -255,16 +288,18 @@ const ALLOWED_ARTIST = {
   rejected: [],
 };
 
-/** Patron: pay after accept; accept final delivery → completed. */
+/** Patron: pay after accept; accept final delivery → completed; reject draft → back to accepted. */
 const ALLOWED_PATRON = {
   accepted: ['inProgress'],
-  inProgress: ['completed'],
+  inProgress: ['completed', 'accepted'],
 };
 
 const RETURNING_COMMISSION = `RETURNING
       id,
       patron_id AS "patronId",
       artist_id AS "artistId",
+      (SELECT COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1), 'Artist')
+       FROM users u WHERE u.id = artist_id LIMIT 1) AS "artistUsername",
       title,
       client_name AS "clientName",
       description,
@@ -280,7 +315,8 @@ const RETURNING_COMMISSION = `RETURNING
       last_message_at AS "lastMessageAt",
       completed_at AS "completedAt",
       unread_for_artist AS "unreadForArtist",
-      unread_for_patron AS "unreadForPatron"`;
+      unread_for_patron AS "unreadForPatron",
+      submission_round AS "submissionRound"`;
 
 async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
   const cid = Number(commissionId);
@@ -339,18 +375,37 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
     if (isArtist && Number(m.artistId) !== uid) {
       return { ok: false, reason: 'forbidden' };
     }
+    if (
+      isArtist &&
+      currentNormalized === 'accepted' &&
+      nextStatus === 'inProgress'
+    ) {
+      m.submissionRound = Number(m.submissionRound ?? 0) + 1;
+    }
     m.status = nextStatus;
     if (nextStatus === 'completed') {
       m.completedAt = new Date().toISOString();
     }
-    return { ok: true, commission: { ...m } };
+    const artist = memoryStore.users.find((u) => Number(u.id) === Number(m.artistId));
+    const artistUsername = artist
+      ? String(artist.username || '').trim() ||
+        String(artist.email || '')
+          .split('@')[0]
+          .trim() ||
+        null
+      : null;
+    return { ok: true, commission: mapRow({ ...m, artistUsername }) };
   }
 
   const whereRole = isPatron ? 'patron_id' : 'artist_id';
   const completedFragment =
     nextStatus === 'completed' ? ', completed_at = CURRENT_TIMESTAMP' : '';
+  const bumpSubmission =
+    isArtist && currentNormalized === 'accepted' && nextStatus === 'inProgress'
+      ? ', submission_round = submission_round + 1'
+      : '';
   const result = await query(
-    `UPDATE commissions SET status = $2${completedFragment} WHERE id = $1 AND ${whereRole} = $3
+    `UPDATE commissions SET status = $2${completedFragment}${bumpSubmission} WHERE id = $1 AND ${whereRole} = $3
     ${RETURNING_COMMISSION}`,
     [cid, nextStatus, uid],
   );

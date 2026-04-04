@@ -2,6 +2,20 @@ const { isPostgresEnabled, query } = require('../config/database');
 const { memoryStore } = require('../data/memoryStore');
 const authRepository = require('./authRepository');
 const followsRepository = require('./followsRepository');
+const commissionsRepository = require('./commissionsRepository');
+
+function workStageKeyFromRound(submissionRound) {
+  const r = Number(submissionRound);
+  if (!Number.isFinite(r) || r <= 1) return 'first';
+  if (r === 2) return 'second';
+  return 'last';
+}
+
+function workStageTitleFromKey(key) {
+  if (key === 'second') return 'Second work';
+  if (key === 'last') return 'Last work';
+  return 'First work';
+}
 
 async function canViewerSeeProfilePosts(profileUserId, viewerUserId) {
   const pid = Number(profileUserId);
@@ -726,6 +740,49 @@ async function appendCommissionCompletionChatLine(commissionId, artistUserId) {
      WHERE id = $1`,
     [cid, line],
   );
+}
+
+async function appendWorkSubmittedNotice(commissionId, artistUserId, submissionRound) {
+  const cid = Number(commissionId);
+  const aid = Number(artistUserId);
+  const round = Number(submissionRound);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(aid) || aid <= 0) {
+    return;
+  }
+
+  const conv = await findConversationByCommissionId(cid);
+  if (!conv || !conv.id) return;
+
+  const stageKey = workStageKeyFromRound(round);
+  let displayName = 'Artist';
+  if (!isPostgresEnabled()) {
+    const u = memoryStore.users.find((x) => Number(x.id) === aid);
+    if (u) {
+      displayName =
+        String(u.username || '').trim() ||
+        String(u.email || '')
+          .split('@')[0]
+          .trim() ||
+        'Artist';
+    }
+  } else {
+    const u = await authRepository.findUserById(aid);
+    if (u) {
+      displayName =
+        String(u.username || '').trim() ||
+        String(u.email || '')
+          .split('@')[0]
+          .trim() ||
+        'Artist';
+    }
+  }
+  const safeName = displayName.replace(/\|/g, ' ').trim() || 'Artist';
+  const line = `WORK_SUBMITTED|${stageKey}|${safeName}`;
+  await createMessage({ conversationId: conv.id, senderId: aid, content: line });
+  const stageTitle = workStageTitleFromKey(stageKey);
+  const preview = `@${safeName} submitted ${stageTitle}.`;
+  await updateConversationLastMessage(conv.id, preview);
+  await commissionsRepository.applyCommissionThreadMessage(cid, preview, aid);
 }
 
 async function listEvents() {
@@ -1553,6 +1610,7 @@ module.exports = {
   createConversation,
   createCommissionConversation,
   appendCommissionCompletionChatLine,
+  appendWorkSubmittedNotice,
   listConversationParticipantIdsExcluding,
   listEvents,
   createEvent,

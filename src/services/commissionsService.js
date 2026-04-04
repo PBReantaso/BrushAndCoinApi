@@ -123,6 +123,9 @@ async function updateCommissionStatus(commissionId, input, user) {
     throw err;
   }
 
+  const oldStatus =
+    String(existing.status) === 'inquiry' ? 'pending' : String(existing.status);
+
   const result = await commissionsRepository.updateCommissionStatus(commissionId, status, uid);
   if (!result.ok) {
     if (result.reason === 'not_found') {
@@ -149,17 +152,47 @@ async function updateCommissionStatus(commissionId, input, user) {
 
   const patronId = Number(existing.patronId);
   const artistId = Number(existing.artistId);
+  const newStatus = String(result.commission.status);
+
   const patronConfirmedPayment =
-    uid === patronId &&
-    String(existing.status) === 'accepted' &&
-    status === 'inProgress';
+    uid === patronId && oldStatus === 'accepted' && newStatus === 'inProgress';
 
   if (patronConfirmedPayment && Number.isFinite(artistId) && artistId > 0) {
     notificationsService.notifyCommissionPatronConfirmedPayment(artistId, user, result.commission);
   }
 
-  const newStatus = String(result.commission.status);
-  if (Number.isFinite(patronId) && patronId > 0 && newStatus !== String(existing.status)) {
+  if (
+    uid === artistId &&
+    oldStatus === 'accepted' &&
+    newStatus === 'inProgress' &&
+    Number.isFinite(artistId) &&
+    artistId > 0
+  ) {
+    try {
+      const round = Number(result.commission.submissionRound ?? 1);
+      await contentRepository.appendWorkSubmittedNotice(commissionId, uid, round);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[commissions] work submitted chat line', e);
+    }
+  }
+
+  if (
+    uid === patronId &&
+    oldStatus === 'inProgress' &&
+    newStatus === 'accepted' &&
+    Number.isFinite(artistId) &&
+    artistId > 0
+  ) {
+    notificationsService.notifyCommissionPatronRequestedRevision(artistId, user, result.commission);
+  }
+
+  if (
+    Number.isFinite(patronId) &&
+    patronId > 0 &&
+    newStatus !== oldStatus &&
+    uid !== patronId
+  ) {
     notificationsService.notifyCommissionStatusToPatron(patronId, user, result.commission, newStatus);
   }
 

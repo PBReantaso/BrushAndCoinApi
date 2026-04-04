@@ -262,6 +262,25 @@ function notifyCommissionPatronConfirmedPayment(artistId, patronUser, commission
   });
 }
 
+function notifyCommissionPatronRequestedRevision(artistId, patronUser, commission) {
+  const aid = Number(artistId);
+  const pid = Number(patronUser?.id);
+  if (!Number.isFinite(aid) || aid <= 0 || aid === pid) {
+    return;
+  }
+  const patronName = displayNameFromUser(patronUser);
+  const titleText = String(commission?.title ?? 'A commission').trim() || 'A commission';
+  scheduleWork(async () => {
+    await notificationsRepository.insertNotification({
+      userId: aid,
+      type: 'commission_update',
+      title: 'Revision requested',
+      body: `${patronName} asked for changes on "${titleText}". Submit an updated version when ready.`,
+      payload: { commissionId: Number(commission?.id), status: 'accepted' },
+    });
+  });
+}
+
 function notifyCommissionReleasedToArtist(artistId, patronUser, commission) {
   const aid = Number(artistId);
   const pid = Number(patronUser?.id);
@@ -362,6 +381,7 @@ module.exports = {
   notifyFollowersEventUpdated,
   notifyCommissionToArtist,
   notifyCommissionPatronConfirmedPayment,
+  notifyCommissionPatronRequestedRevision,
   notifyCommissionReleasedToArtist,
   notifyCommissionStatusToPatron,
   broadcastSystemAnnouncement,
