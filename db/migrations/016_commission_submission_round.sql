@@ -1,0 +1,2 @@
+ALTER TABLE commissions
+  ADD COLUMN IF NOT EXISTS submission_round INTEGER NOT NULL DEFAULT 0;
