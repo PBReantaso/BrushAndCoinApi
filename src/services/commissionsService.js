@@ -4,6 +4,14 @@ const commissionsRepository = require('../repositories/commissionsRepository');
 const followsRepository = require('../repositories/followsRepository');
 const notificationsService = require('./notificationsService');
 
+function actorDisplayName(user) {
+  const u = user?.username;
+  if (u && String(u).trim()) return String(u).trim();
+  const e = user?.email;
+  if (e && String(e).includes('@')) return String(e).split('@')[0];
+  return 'Artist';
+}
+
 async function listCommissions(user) {
   const userId = Number(user?.id);
   if (!Number.isFinite(userId) || userId <= 0) {
@@ -155,7 +163,9 @@ async function updateCommissionStatus(commissionId, input, user) {
   const newStatus = String(result.commission.status);
 
   const patronConfirmedPayment =
-    uid === patronId && oldStatus === 'accepted' && newStatus === 'inProgress';
+    uid === patronId &&
+    (oldStatus === 'accepted' || oldStatus === 'pending') &&
+    newStatus === 'inProgress';
 
   if (patronConfirmedPayment && Number.isFinite(artistId) && artistId > 0) {
     notificationsService.notifyCommissionPatronConfirmedPayment(artistId, user, result.commission);
@@ -174,6 +184,30 @@ async function updateCommissionStatus(commissionId, input, user) {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[commissions] work submitted chat line', e);
+    }
+  }
+
+  if (
+    uid === artistId &&
+    oldStatus === 'pending' &&
+    newStatus === 'accepted' &&
+    Number.isFinite(artistId) &&
+    artistId > 0
+  ) {
+    try {
+      const patronLabel =
+        String(existing.clientName || result.commission.clientName || 'Patron').trim() ||
+        'Patron';
+      const artistLabel = actorDisplayName(user);
+      await contentRepository.appendCommissionAcceptedNotice(
+        Number(commissionId),
+        artistId,
+        artistLabel,
+        patronLabel,
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[commissions] accept chat line', e);
     }
   }
 

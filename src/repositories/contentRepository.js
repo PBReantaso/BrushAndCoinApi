@@ -261,6 +261,7 @@ async function listConversationsByUser(userId) {
           lastMessage: conversation.lastMessage,
           lastMessageDate: conversation.lastMessageDate,
           hasUnreadMessages,
+          commissionId: conversation.commissionId ?? null,
         };
       })
       .filter((item) => item != null);
@@ -285,6 +286,7 @@ async function listConversationsByUser(userId) {
       COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1), c.name) AS name,
       c.last_message AS "lastMessage",
       c.last_message_date AS "lastMessageDate",
+      c.commission_id AS "commissionId",
       CASE
         WHEN lp.sender_id IS NOT NULL
           AND lp.sender_id <> $1
@@ -583,6 +585,7 @@ async function findConversationByIdForUser(conversationId, userId) {
       name: otherName,
       lastMessage: conversation.lastMessage,
       lastMessageDate: conversation.lastMessageDate,
+      commissionId: conversation.commissionId ?? null,
     };
   }
 
@@ -591,7 +594,8 @@ async function findConversationByIdForUser(conversationId, userId) {
       c.id,
       COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1)) AS name,
       c.last_message AS "lastMessage",
-      c.last_message_date AS "lastMessageDate"
+      c.last_message_date AS "lastMessageDate",
+      c.commission_id AS "commissionId"
     FROM conversations c
     INNER JOIN conversation_participants cp_current ON c.id = cp_current.conversation_id AND cp_current.user_id = $1
     INNER JOIN conversation_participants cp_other ON c.id = cp_other.conversation_id AND cp_other.user_id != $1
@@ -781,6 +785,30 @@ async function appendWorkSubmittedNotice(commissionId, artistUserId, submissionR
   await createMessage({ conversationId: conv.id, senderId: aid, content: line });
   const stageTitle = workStageTitleFromKey(stageKey);
   const preview = `@${safeName} submitted ${stageTitle}.`;
+  await updateConversationLastMessage(conv.id, preview);
+  await commissionsRepository.applyCommissionThreadMessage(cid, preview, aid);
+}
+
+async function appendCommissionAcceptedNotice(
+  commissionId,
+  artistUserId,
+  artistDisplayName,
+  patronDisplayName,
+) {
+  const cid = Number(commissionId);
+  const aid = Number(artistUserId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(aid) || aid <= 0) {
+    return;
+  }
+
+  const conv = await findConversationByCommissionId(cid);
+  if (!conv || !conv.id) return;
+
+  const a = String(artistDisplayName || 'Artist').replace(/\|/g, ' ').trim() || 'Artist';
+  const p = String(patronDisplayName || 'Patron').replace(/\|/g, ' ').trim() || 'Patron';
+  const line = `COMMISSION_ACCEPTED|${a}|${p}`;
+  await createMessage({ conversationId: conv.id, senderId: aid, content: line });
+  const preview = `@${a} accepted @${p}'s request.`;
   await updateConversationLastMessage(conv.id, preview);
   await commissionsRepository.applyCommissionThreadMessage(cid, preview, aid);
 }
@@ -1611,6 +1639,7 @@ module.exports = {
   createCommissionConversation,
   appendCommissionCompletionChatLine,
   appendWorkSubmittedNotice,
+  appendCommissionAcceptedNotice,
   listConversationParticipantIdsExcluding,
   listEvents,
   createEvent,
