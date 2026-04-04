@@ -1,4 +1,5 @@
 const authRepository = require('../repositories/authRepository');
+const contentRepository = require('../repositories/contentRepository');
 const commissionsRepository = require('../repositories/commissionsRepository');
 const followsRepository = require('../repositories/followsRepository');
 const notificationsService = require('./notificationsService');
@@ -12,6 +13,22 @@ async function listCommissions(user) {
   }
   const commissions = await commissionsRepository.listCommissionsForUser(userId);
   return { commissions };
+}
+
+async function getCommission(commissionId, user) {
+  const userId = Number(user?.id);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const err = new Error('Authentication required.');
+    err.statusCode = 401;
+    throw err;
+  }
+  const row = await commissionsRepository.findCommissionByIdForUser(commissionId, userId);
+  if (!row) {
+    const err = new Error('Commission not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  return { commission: commissionsRepository.toApiCommission(row) };
 }
 
 async function createCommission(input, user) {
@@ -114,7 +131,9 @@ async function updateCommissionStatus(commissionId, input, user) {
       throw err;
     }
     if (result.reason === 'forbidden') {
-      const err = new Error('Only the assigned artist can update this commission.');
+      const err = new Error(
+        'You are not allowed to update this commission.',
+      );
       err.statusCode = 403;
       throw err;
     }
@@ -129,8 +148,40 @@ async function updateCommissionStatus(commissionId, input, user) {
   }
 
   const patronId = Number(existing.patronId);
-  if (Number.isFinite(patronId) && patronId > 0 && status !== String(existing.status)) {
-    notificationsService.notifyCommissionStatusToPatron(patronId, user, result.commission, status);
+  const artistId = Number(existing.artistId);
+  const patronConfirmedPayment =
+    uid === patronId &&
+    String(existing.status) === 'accepted' &&
+    status === 'inProgress';
+
+  if (patronConfirmedPayment && Number.isFinite(artistId) && artistId > 0) {
+    notificationsService.notifyCommissionPatronConfirmedPayment(artistId, user, result.commission);
+  }
+
+  const newStatus = String(result.commission.status);
+  if (Number.isFinite(patronId) && patronId > 0 && newStatus !== String(existing.status)) {
+    notificationsService.notifyCommissionStatusToPatron(patronId, user, result.commission, newStatus);
+  }
+
+  if (newStatus === 'completed') {
+    try {
+      await contentRepository.appendCommissionCompletionChatLine(
+        Number(commissionId),
+        Number(existing.artistId),
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[commissions] completion chat line', e);
+    }
+  }
+
+  if (
+    newStatus === 'completed' &&
+    uid === patronId &&
+    Number.isFinite(artistId) &&
+    artistId > 0
+  ) {
+    notificationsService.notifyCommissionReleasedToArtist(artistId, user, result.commission);
   }
 
   return { commission: commissionsRepository.toApiCommission(result.commission) };
@@ -138,6 +189,7 @@ async function updateCommissionStatus(commissionId, input, user) {
 
 module.exports = {
   listCommissions,
+  getCommission,
   createCommission,
   updateCommissionStatus,
 };

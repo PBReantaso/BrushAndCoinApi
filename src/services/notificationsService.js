@@ -243,6 +243,44 @@ function notifyCommissionToArtist(artistId, patronUser, commission) {
   });
 }
 
+function notifyCommissionPatronConfirmedPayment(artistId, patronUser, commission) {
+  const aid = Number(artistId);
+  const pid = Number(patronUser?.id);
+  if (!Number.isFinite(aid) || aid <= 0 || aid === pid) {
+    return;
+  }
+  const patronName = displayNameFromUser(patronUser);
+  const titleText = String(commission?.title ?? 'A commission').trim() || 'A commission';
+  scheduleWork(async () => {
+    await notificationsRepository.insertNotification({
+      userId: aid,
+      type: 'commission_update',
+      title: 'Payment confirmed',
+      body: `${patronName} confirmed payment for "${titleText}". You can start work.`,
+      payload: { commissionId: Number(commission?.id), status: 'inProgress' },
+    });
+  });
+}
+
+function notifyCommissionReleasedToArtist(artistId, patronUser, commission) {
+  const aid = Number(artistId);
+  const pid = Number(patronUser?.id);
+  if (!Number.isFinite(aid) || aid <= 0 || aid === pid) {
+    return;
+  }
+  const patronName = displayNameFromUser(patronUser);
+  const titleText = String(commission?.title ?? 'A commission').trim() || 'A commission';
+  scheduleWork(async () => {
+    await notificationsRepository.insertNotification({
+      userId: aid,
+      type: 'commission_update',
+      title: 'Commission completed',
+      body: `${patronName} accepted the final work for "${titleText}". Payout will be processed per escrow terms.`,
+      payload: { commissionId: Number(commission?.id), status: 'completed' },
+    });
+  });
+}
+
 function notifyCommissionStatusToPatron(patronId, artistUser, commission, newStatus) {
   const p = Number(patronId);
   const aid = Number(artistUser?.id);
@@ -252,7 +290,8 @@ function notifyCommissionStatusToPatron(patronId, artistUser, commission, newSta
   const artistName = displayNameFromUser(artistUser);
   const titleText = String(commission?.title ?? 'Your commission').trim() || 'Your commission';
   const statusLabels = {
-    inquiry: 'pending review',
+    pending: 'pending',
+    inquiry: 'pending',
     accepted: 'accepted',
     inProgress: 'in progress',
     completed: 'completed',
@@ -322,6 +361,8 @@ module.exports = {
   notifyFollowersNewEvent,
   notifyFollowersEventUpdated,
   notifyCommissionToArtist,
+  notifyCommissionPatronConfirmedPayment,
+  notifyCommissionReleasedToArtist,
   notifyCommissionStatusToPatron,
   broadcastSystemAnnouncement,
 };

@@ -1,6 +1,7 @@
 const authRepository = require('../repositories/authRepository');
 const contentRepository = require('../repositories/contentRepository');
 const followsRepository = require('../repositories/followsRepository');
+const commissionsRepository = require('../repositories/commissionsRepository');
 const notificationsService = require('./notificationsService');
 const commissionsService = require('./commissionsService');
 
@@ -34,7 +35,11 @@ async function updateCommissionStatus(commissionId, status, user) {
 
 async function getMessages(user) {
   const conversations = await contentRepository.listConversationsByUser(user?.id);
-  return { conversations };
+  const normalized = conversations.map((c) => {
+    const hasUnread = Boolean(c.hasUnreadMessages);
+    return { ...c, hasUnreadMessages: hasUnread, hasRead: !hasUnread };
+  });
+  return { conversations: normalized };
 }
 
 async function getConversationMessages(conversationId, user) {
@@ -53,6 +58,13 @@ async function getConversationMessages(conversationId, user) {
 
   const messages = await contentRepository.listMessages(conversationId);
   await contentRepository.upsertConversationRead(conversationId, user.id);
+
+  const convo = await contentRepository.findConversationById(conversationId);
+  const commId = convo?.commissionId != null ? Number(convo.commissionId) : null;
+  if (Number.isFinite(commId) && commId > 0) {
+    await commissionsRepository.markCommissionThreadViewed(commId, user.id);
+  }
+
   return { messages };
 }
 
@@ -87,6 +99,18 @@ async function sendMessage(conversationId, input, user) {
     throw error;
   }
 
+  const convoMeta = await contentRepository.findConversationById(conversationId);
+  const linkedCommissionId =
+    convoMeta?.commissionId != null ? Number(convoMeta.commissionId) : null;
+  if (Number.isFinite(linkedCommissionId) && linkedCommissionId > 0) {
+    const comm = await commissionsRepository.findCommissionById(linkedCommissionId);
+    if (comm && String(comm.status) === 'completed') {
+      const error = new Error('This commission is completed. Messaging is closed.');
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+
   const message = await contentRepository.createMessage({
     conversationId,
     senderId: user.id,
@@ -107,18 +131,66 @@ async function sendMessage(conversationId, input, user) {
     conversationId: Number(conversationId),
   });
 
+  if (Number.isFinite(linkedCommissionId) && linkedCommissionId > 0) {
+    await commissionsRepository.applyCommissionThreadMessage(
+      linkedCommissionId,
+      content,
+      user.id,
+    );
+  }
+
   return { message };
 }
 
 async function startConversation(input, user) {
-  const otherUserId = input?.otherUserId;
-  if (!otherUserId || typeof otherUserId !== 'number') {
+  const otherUserId = Number(input?.otherUserId);
+  if (!Number.isFinite(otherUserId) || otherUserId <= 0) {
     const error = new Error('Other user ID is required.');
     error.statusCode = 400;
     throw error;
   }
 
   const viewerId = Number(user?.id);
+  const commissionIdRaw = input?.commissionId;
+  const commissionId =
+    commissionIdRaw != null && commissionIdRaw !== '' ? Number(commissionIdRaw) : null;
+
+  if (Number.isFinite(commissionId) && commissionId > 0) {
+    const comm = await commissionsRepository.findCommissionById(commissionId);
+    if (!comm) {
+      const error = new Error('Commission not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (Number(comm.patronId) !== viewerId && Number(comm.artistId) !== viewerId) {
+      const error = new Error('Forbidden.');
+      error.statusCode = 403;
+      throw error;
+    }
+    const expectedOther = Number(comm.patronId) === viewerId ? Number(comm.artistId) : Number(comm.patronId);
+    if (expectedOther !== otherUserId) {
+      const error = new Error('Other user does not match this commission.');
+      error.statusCode = 400;
+      throw error;
+    }
+    let conv = await contentRepository.findConversationByCommissionId(commissionId);
+    if (!conv) {
+      await contentRepository.createCommissionConversation(
+        Number(comm.patronId),
+        Number(comm.artistId),
+        commissionId,
+      );
+      conv = await contentRepository.findConversationByCommissionId(commissionId);
+    }
+    if (!conv?.id) {
+      const error = new Error('Could not open commission chat.');
+      error.statusCode = 500;
+      throw error;
+    }
+    const shaped = await contentRepository.findConversationByIdForUser(conv.id, viewerId);
+    return { conversation: shaped };
+  }
+
   if ((await authRepository.isUserPrivate(otherUserId)) && viewerId !== otherUserId) {
     const allowed = await followsRepository.isFollowing(viewerId, otherUserId);
     if (!allowed) {
@@ -130,14 +202,13 @@ async function startConversation(input, user) {
     }
   }
 
-  // Check if conversation already exists
   let conversation = await contentRepository.findConversationBetweenUsers(user?.id, otherUserId);
   if (!conversation) {
-    // Create new conversation
     conversation = await contentRepository.createConversation(user?.id, otherUserId);
   }
 
-  return { conversation };
+  const shaped = await contentRepository.findConversationByIdForUser(conversation.id, viewerId);
+  return { conversation: shaped };
 }
 
 async function getEvents() {

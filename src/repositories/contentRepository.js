@@ -453,17 +453,44 @@ async function findConversationBetweenUsers(userId1, userId2) {
     `SELECT c.id,
       COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1)) AS name,
       c.last_message AS "lastMessage",
-      c.last_message_date AS "lastMessageDate"
+      c.last_message_date AS "lastMessageDate",
+      c.commission_id AS "commissionId"
      FROM conversations c
      INNER JOIN conversation_participants cp_current
        ON c.id = cp_current.conversation_id AND cp_current.user_id = $1
      INNER JOIN conversation_participants cp_other
        ON c.id = cp_other.conversation_id AND cp_other.user_id = $2
      INNER JOIN users u_other ON u_other.id = $2
+     WHERE c.commission_id IS NULL
      LIMIT 1`,
     [userId1, userId2],
   );
   return result.rows[0];
+}
+
+async function findConversationByCommissionId(commissionId) {
+  const cid = Number(commissionId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+
+  if (!isPostgresEnabled()) {
+    const conv = memoryStore.conversations.find((c) => Number(c.commissionId) === cid);
+    if (!conv) return null;
+    return {
+      id: conv.id,
+      name: conv.name,
+      lastMessage: conv.lastMessage,
+      lastMessageDate: conv.lastMessageDate,
+      commissionId: conv.commissionId,
+    };
+  }
+
+  const result = await query(
+    `SELECT id, name, last_message AS "lastMessage", last_message_date AS "lastMessageDate",
+            commission_id AS "commissionId"
+     FROM conversations WHERE commission_id = $1 LIMIT 1`,
+    [cid],
+  );
+  return result.rows[0] || null;
 }
 
 async function isUserInConversation(conversationId, userId) {
@@ -502,11 +529,19 @@ async function listConversationParticipantIdsExcluding(conversationId, excludeUs
 
 async function findConversationById(conversationId) {
   if (!isPostgresEnabled()) {
-    return memoryStore.conversations.find(c => c.id === conversationId) || null;
+    const c = memoryStore.conversations.find((x) => x.id === conversationId) || null;
+    if (!c) return null;
+    return {
+      id: c.id,
+      name: c.name,
+      lastMessage: c.lastMessage,
+      lastMessageDate: c.lastMessageDate,
+      commissionId: c.commissionId ?? null,
+    };
   }
 
   const result = await query(
-    'SELECT id, name, last_message AS "lastMessage", last_message_date AS "lastMessageDate" FROM conversations WHERE id = $1 LIMIT 1',
+    'SELECT id, name, last_message AS "lastMessage", last_message_date AS "lastMessageDate", commission_id AS "commissionId" FROM conversations WHERE id = $1 LIMIT 1',
     [conversationId],
   );
   return result.rows[0] || null;
@@ -571,6 +606,7 @@ async function createConversation(userId1, userId2) {
       name: otherName,
       lastMessage: null,
       lastMessageDate: null,
+      commissionId: null,
     };
     memoryStore.conversations.push(conversation);
     
@@ -605,7 +641,91 @@ async function createConversation(userId1, userId2) {
     [conversation.id, userId1, userId2],
   );
 
-  return { id: conversation.id, name: conversation.name };
+  return { id: conversation.id, name: conversation.name, commissionId: null };
+}
+
+async function createCommissionConversation(userId1, userId2, commissionId) {
+  const cid = Number(commissionId);
+  const u1 = Number(userId1);
+  const u2 = Number(userId2);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(u1) || !Number.isFinite(u2)) {
+    return null;
+  }
+
+  if (!isPostgresEnabled()) {
+    const nextId =
+      memoryStore.conversations.length > 0
+        ? Math.max(...memoryStore.conversations.map((c) => c.id)) + 1
+        : 1;
+    const otherUser = memoryStore.users.find((u) => u.id === userId2);
+    const otherName = otherUser
+      ? otherUser.username || (otherUser.email || '').split('@')[0] || 'User'
+      : 'User';
+    const conversation = {
+      id: nextId,
+      name: otherName,
+      lastMessage: null,
+      lastMessageDate: null,
+      commissionId: cid,
+    };
+    memoryStore.conversations.push(conversation);
+    memoryStore.conversationParticipants.push(
+      { conversationId: nextId, userId: u1 },
+      { conversationId: nextId, userId: u2 },
+    );
+    return { id: nextId, name: otherName, commissionId: cid };
+  }
+
+  const usersResult = await query('SELECT id, username FROM users WHERE id IN ($1, $2)', [u1, u2]);
+  const user2row = usersResult.rows.find((u) => u.id === u2);
+  const name = user2row?.username || 'User';
+
+  const convResult = await query(
+    'INSERT INTO conversations (name, commission_id) VALUES ($1, $2) RETURNING id, name, commission_id AS "commissionId"',
+    [name, cid],
+  );
+  const conversation = convResult.rows[0];
+  await query(
+    'INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2), ($1, $3)',
+    [conversation.id, u1, u2],
+  );
+  return { id: conversation.id, name: conversation.name, commissionId: conversation.commissionId };
+}
+
+async function appendCommissionCompletionChatLine(commissionId, artistUserId) {
+  const cid = Number(commissionId);
+  const aid = Number(artistUserId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(aid) || aid <= 0) {
+    return;
+  }
+
+  const conv = await findConversationByCommissionId(cid);
+  if (!conv || !conv.id) return;
+
+  const line = `Commission No#${cid} - Completed`;
+  await createMessage({ conversationId: conv.id, senderId: aid, content: line });
+  await updateConversationLastMessage(conv.id, line);
+
+  if (!isPostgresEnabled()) {
+    const m = memoryStore.commissions.find((c) => Number(c.id) === cid);
+    if (m) {
+      m.lastMessage = line;
+      m.lastMessageAt = new Date().toISOString();
+      m.unreadForArtist = false;
+      m.unreadForPatron = true;
+    }
+    return;
+  }
+
+  await query(
+    `UPDATE commissions
+     SET last_message = $2,
+         last_message_at = CURRENT_TIMESTAMP,
+         unread_for_artist = FALSE,
+         unread_for_patron = TRUE
+     WHERE id = $1`,
+    [cid, line],
+  );
 }
 
 async function listEvents() {
@@ -1427,9 +1547,12 @@ module.exports = {
   updateConversationLastMessage,
   isUserInConversation,
   findConversationBetweenUsers,
+  findConversationByCommissionId,
   findConversationById,
   findConversationByIdForUser,
   createConversation,
+  createCommissionConversation,
+  appendCommissionCompletionChatLine,
   listConversationParticipantIdsExcluding,
   listEvents,
   createEvent,
