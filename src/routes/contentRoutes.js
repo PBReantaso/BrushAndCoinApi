@@ -8,8 +8,7 @@ router.get('/dashboard', requireAuth, contentController.dashboard);
 router.get('/artists', requireAuth, contentController.artists);
 router.get('/projects', requireAuth, contentController.projects);
 router.get('/commissions', requireAuth, contentController.commissions);
-router.post('/commissions', requireAuth, contentController.createCommission);
-router.put('/commissions/:id/status', requireAuth, contentController.updateCommissionStatus);
+// POST/PUT /commissions* are registered on commissionsRoutes (single handler).
 router.get('/messages', requireAuth, contentController.messages);
 router.get('/messages/unread-count', requireAuth, contentController.unreadMessagesCount);
 router.get('/messages/:id', requireAuth, contentController.getConversationMessages);

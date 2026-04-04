@@ -1,6 +1,12 @@
 const { isPostgresEnabled, query } = require('../config/database');
 const { memoryStore } = require('../data/memoryStore');
 
+/** DB may still store `inquiry` (pre-migration); API always exposes `pending`. */
+function normalizeDbCommissionStatus(status) {
+  const s = String(status ?? '');
+  return s === 'inquiry' ? 'pending' : s;
+}
+
 function mapRow(row) {
   if (!row) return null;
   const ref =
@@ -32,7 +38,7 @@ function mapRow(row) {
     isUrgent: Boolean(row.is_urgent ?? row.isUrgent),
     referenceImages: images,
     totalAmount: Number(row.total_amount ?? row.totalAmount ?? 0),
-    status: row.status,
+    status: normalizeDbCommissionStatus(row.status),
     milestones: Array.isArray(row.milestones) ? row.milestones : [],
     createdAt: row.created_at ?? row.createdAt,
     lastMessageAt: row.last_message_at ?? row.lastMessageAt ?? null,
@@ -235,12 +241,11 @@ async function createCommission(data) {
     return m;
   }
 
-  const result = await query(
-    `INSERT INTO commissions (
+  const insertSql = `INSERT INTO commissions (
       patron_id, artist_id, title, client_name, description, budget, deadline,
       special_requirements, is_urgent, reference_images, total_amount, status,
       unread_for_artist, unread_for_patron
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'pending', TRUE, FALSE)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::text, TRUE, FALSE)
     RETURNING
       id,
       patron_id AS "patronId",
@@ -262,22 +267,37 @@ async function createCommission(data) {
       completed_at AS "completedAt",
       unread_for_artist AS "unreadForArtist",
       unread_for_patron AS "unreadForPatron",
-      submission_round AS "submissionRound"`,
-    [
-      patronId,
-      artistId,
-      row.title,
-      row.clientName,
-      row.description,
-      row.budget,
-      row.deadline,
-      row.specialRequirements,
-      row.isUrgent,
-      JSON.stringify(row.referenceImages),
-      row.totalAmount,
-    ],
-  );
-  return mapRow(result.rows[0]);
+      submission_round AS "submissionRound"`;
+
+  const insertParams = [
+    patronId,
+    artistId,
+    row.title,
+    row.clientName,
+    row.description,
+    row.budget,
+    row.deadline,
+    row.specialRequirements,
+    row.isUrgent,
+    JSON.stringify(row.referenceImages),
+    row.totalAmount,
+  ];
+
+  try {
+    const result = await query(insertSql, [...insertParams, 'pending']);
+    return mapRow(result.rows[0]);
+  } catch (e) {
+    const msg = String(e?.message || '');
+    if (
+      e?.code === '23514' &&
+      msg.includes('commissions_status_check') &&
+      msg.includes('commissions')
+    ) {
+      const result = await query(insertSql, [...insertParams, 'inquiry']);
+      return mapRow(result.rows[0]);
+    }
+    throw e;
+  }
 }
 
 const ALLOWED_ARTIST = {
@@ -288,8 +308,9 @@ const ALLOWED_ARTIST = {
   rejected: [],
 };
 
-/** Patron: pay after accept; accept final delivery → completed; reject draft → back to accepted. */
+/** Patron: mock pay after request (pending) or after artist accept; then complete or reject draft. */
 const ALLOWED_PATRON = {
+  pending: ['inProgress'],
   accepted: ['inProgress'],
   inProgress: ['completed', 'accepted'],
 };
