@@ -59,6 +59,13 @@ async function listProjects() {
         title: row.title,
         clientName: row.clientName,
         status: row.status,
+        description: row.description || '',
+        budget: Number(row.budget || 0),
+        deadline: row.deadline || null,
+        specialRequirements: row.special_requirements || '',
+        isUrgent: row.is_urgent || false,
+        referenceImages: row.reference_images || [],
+        totalAmount: Number(row.total_amount || 0),
         milestones: [],
       });
     }
@@ -73,6 +80,93 @@ async function listProjects() {
   }
 
   return Array.from(projectMap.values());
+}
+
+async function createProject({
+  title,
+  clientName,
+  status = 'inquiry',
+  description = '',
+  budget = 0,
+  deadline = null,
+  specialRequirements = '',
+  isUrgent = false,
+  referenceImages = [],
+  totalAmount = 0,
+  milestones = [],
+}) {
+  if (!isPostgresEnabled()) {
+    const nextId = memoryStore.projects.length > 0 ? Math.max(...memoryStore.projects.map(p => p.id)) + 1 : 1;
+    const project = {
+      id: nextId,
+      title,
+      clientName,
+      status,
+      description,
+      budget,
+      deadline,
+      specialRequirements,
+      isUrgent,
+      referenceImages,
+      totalAmount,
+      milestones: Array.isArray(milestones) ? milestones : [],
+    };
+    memoryStore.projects.push(project);
+    return project;
+  }
+
+  const result = await query(
+    `INSERT INTO projects (title, client_name, status)
+     VALUES ($1, $2, $3)
+     RETURNING id, title, client_name AS "clientName", status`,
+    [title, clientName, status],
+  );
+
+  const project = result.rows[0];
+  project.description = description;
+  project.budget = budget;
+  project.deadline = deadline;
+  project.specialRequirements = specialRequirements;
+  project.isUrgent = isUrgent;
+  project.referenceImages = referenceImages;
+  project.totalAmount = totalAmount;
+
+  if (Array.isArray(milestones) && milestones.length > 0) {
+    const values = [];
+    const placeholders = [];
+    let idx = 1;
+    for (const milestone of milestones) {
+      const amount = Number(milestone.amount ?? 0);
+      const titleM = String(milestone.title ?? '').trim();
+      const isReleased = Boolean(milestone.isReleased ?? false);
+      values.push(project.id, titleM, amount, isReleased);
+      placeholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3})`);
+      idx += 4;
+    }
+    await query(
+      `INSERT INTO project_milestones (project_id, title, amount, is_released) VALUES ${placeholders.join(', ')}`,
+      values,
+    );
+  }
+
+  return project;
+}
+
+async function updateProjectStatus(projectId, status) {
+  if (!isPostgresEnabled()) {
+    const project = memoryStore.projects.find((p) => p.id === projectId);
+    if (!project) return null;
+    project.status = status;
+    return project;
+  }
+
+  const result = await query(
+    `UPDATE projects SET status = $1 WHERE id = $2
+     RETURNING id, title, client_name AS "clientName", status`,
+    [status, projectId],
+  );
+
+  return result.rows[0] || null;
 }
 
 async function listConversations() {
@@ -1277,6 +1371,8 @@ async function listPostComments(postId) {
 module.exports = {
   listArtists,
   listProjects,
+  createProject,
+  updateProjectStatus,
   listConversations,
   listConversationsByUser,
   listMessages,
