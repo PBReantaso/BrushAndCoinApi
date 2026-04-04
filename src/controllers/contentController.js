@@ -27,6 +27,35 @@ async function projects(req, res, next) {
   }
 }
 
+async function commissions(req, res, next) {
+  try {
+    const payload = await contentService.getCommissions();
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createCommission(req, res, next) {
+  try {
+    const payload = await contentService.createCommission(req.body ?? {}, req.user);
+    res.status(201).json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateCommissionStatus(req, res, next) {
+  try {
+    const commissionId = Number(req.params.id);
+    const status = String(req.body?.status ?? '').trim();
+    const payload = await contentService.updateCommissionStatus(commissionId, status);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function messages(req, res, next) {
   try {
     const payload = await contentService.getMessages(req.user);
@@ -172,6 +201,9 @@ module.exports = {
   dashboard,
   artists,
   projects,
+  commissions,
+  createCommission,
+  updateCommissionStatus,
   messages,
   getConversationMessages,
   sendMessage,
