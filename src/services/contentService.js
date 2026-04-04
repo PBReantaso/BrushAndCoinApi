@@ -2,6 +2,7 @@ const authRepository = require('../repositories/authRepository');
 const contentRepository = require('../repositories/contentRepository');
 const followsRepository = require('../repositories/followsRepository');
 const notificationsService = require('./notificationsService');
+const commissionsService = require('./commissionsService');
 
 async function getDashboard() {
   const projects = await contentRepository.listProjects();
@@ -18,79 +19,17 @@ async function getProjects() {
   return { projects };
 }
 
-async function getCommissions() {
-  const commissions = await contentRepository.listProjects();
-  return { commissions };
+async function getCommissions(user) {
+  return commissionsService.listCommissions(user);
 }
 
 async function createCommission(input, user) {
-  const title = String(input?.title ?? '').trim();
-  if (!title) {
-    const error = new Error('Commission title is required.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const description = String(input?.description ?? '').trim();
-  if (!description) {
-    const error = new Error('Commission description is required.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const clientName = String(input?.clientName ?? '').trim();
-  if (!clientName) {
-    const error = new Error('Client name is required.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const budget = Number(input?.budget ?? 0);
-  if (Number.isNaN(budget) || budget <= 0) {
-    const error = new Error('Budget must be a positive number.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const totalAmount = Number(input?.totalAmount ?? budget);
-  const commission = await contentRepository.createProject({
-    title,
-    clientName,
-    status: 'inquiry',
-    description,
-    budget,
-    deadline: input?.deadline ? String(input.deadline) : null,
-    specialRequirements: String(input?.specialRequirements ?? ''),
-    isUrgent: Boolean(input?.isUrgent ?? false),
-    referenceImages: Array.isArray(input?.referenceImages) ? input.referenceImages : [],
-    totalAmount,
-    milestones: Array.isArray(input?.milestones) ? input.milestones : [],
-  });
-
-  return { commission };
+  const payload = await commissionsService.createCommission(input, user);
+  return payload;
 }
 
-async function updateCommissionStatus(commissionId, status) {
-  if (!Number.isFinite(commissionId) || commissionId <= 0) {
-    const error = new Error('Invalid commission id.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  if (!['inquiry', 'accepted', 'inProgress', 'completed', 'rejected'].includes(status)) {
-    const error = new Error('Invalid status.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const commission = await contentRepository.updateProjectStatus(commissionId, status);
-  if (!commission) {
-    const error = new Error('Commission not found.');
-    error.statusCode = 404;
-    throw error;
-  }
-
-  return { commission };
+async function updateCommissionStatus(commissionId, status, user) {
+  return commissionsService.updateCommissionStatus(commissionId, { status }, user);
 }
 
 async function getMessages(user) {

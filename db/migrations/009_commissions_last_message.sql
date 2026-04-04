@@ -1,0 +1,5 @@
+ALTER TABLE commissions
+  ADD COLUMN IF NOT EXISTS last_message TEXT;
+
+ALTER TABLE commissions
+  ADD COLUMN IF NOT EXISTS has_unread_messages BOOLEAN NOT NULL DEFAULT FALSE;
