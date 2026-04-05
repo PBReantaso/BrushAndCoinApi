@@ -10,6 +10,7 @@ router.post(
   '/notifications/system-announcements',
   notificationsController.createSystemAnnouncement,
 );
+router.patch('/notifications/read-all', requireAuth, notificationsController.markAllRead);
 router.patch('/notifications/:id/read', requireAuth, notificationsController.markRead);
 router.post('/push-devices', requireAuth, notificationsController.registerDevice);
 router.delete('/push-devices', requireAuth, notificationsController.unregisterDevice);

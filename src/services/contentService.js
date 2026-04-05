@@ -410,6 +410,35 @@ async function getTaggedPosts(rawTag, user) {
   return { posts };
 }
 
+async function createMerchandiseItem(input, user) {
+  const userId = Number(user?.id);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const title = String(input?.title ?? '').trim();
+  if (!title) {
+    const error = new Error('Merchandise title is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const imageUrl = input?.imageUrl == null ? null : String(input.imageUrl).trim();
+  const description = String(input?.description ?? '').trim();
+  const item = await contentRepository.createMerchandise({
+    userId,
+    title,
+    description,
+    imageUrl: imageUrl || null,
+  });
+  if (!item) {
+    const error = new Error('Could not create merchandise.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { merchandise: item };
+}
+
 async function createPost(input, user) {
   const userId = Number(user?.id);
   if (!Number.isFinite(userId) || userId <= 0) {
@@ -583,6 +612,7 @@ module.exports = {
   getFeedPosts,
   getMyPosts,
   getTaggedPosts,
+  createMerchandiseItem,
   createPost,
   updatePost,
   likePost,

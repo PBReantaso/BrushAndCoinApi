@@ -102,6 +102,7 @@ async function listFollowers(profileUserId) {
         out.push({
           id: u.id,
           username: u.username || String(u.email || 'user').split('@')[0],
+          avatarUrl: u.avatarUrl ?? null,
         });
       }
     }
@@ -111,7 +112,8 @@ async function listFollowers(profileUserId) {
 
   const result = await query(
     `SELECT u.id,
-            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username
+            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username,
+            u.avatar_url AS "avatarUrl"
      FROM follows f
      INNER JOIN users u ON u.id = f.follower_id
      WHERE f.followed_id = $1
@@ -138,6 +140,7 @@ async function listFollowing(profileUserId) {
         out.push({
           id: u.id,
           username: u.username || String(u.email || 'user').split('@')[0],
+          avatarUrl: u.avatarUrl ?? null,
         });
       }
     }
@@ -147,7 +150,8 @@ async function listFollowing(profileUserId) {
 
   const result = await query(
     `SELECT u.id,
-            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username
+            COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS username,
+            u.avatar_url AS "avatarUrl"
      FROM follows f
      INNER JOIN users u ON u.id = f.followed_id
      WHERE f.follower_id = $1

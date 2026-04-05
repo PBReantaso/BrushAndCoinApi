@@ -5,6 +5,11 @@ const { requireAuth } = require('../middleware/requireAuth');
 const router = express.Router();
 
 router.get('/commissions', requireAuth, commissionsController.listCommissions);
+router.post(
+  '/commissions/:id/viewed',
+  requireAuth,
+  commissionsController.markCommissionViewed,
+);
 router.get('/commissions/:id', requireAuth, commissionsController.getCommission);
 router.post('/commissions', requireAuth, commissionsController.createCommission);
 router.put('/commissions/:id/status', requireAuth, commissionsController.updateCommissionStatus);

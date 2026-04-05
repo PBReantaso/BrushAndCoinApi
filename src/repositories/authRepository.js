@@ -365,6 +365,7 @@ async function searchUsersByQuery(rawQuery, { excludeUserId, limit = 24 }) {
       .map((u) => ({
         id: u.id,
         username: u.username || String(u.email || 'user').split('@')[0],
+        avatarUrl: u.avatarUrl ?? null,
       }))
       .filter((u) => String(u.username).toLowerCase().includes(needle))
       .sort((a, b) => String(a.username).localeCompare(String(b.username)))
@@ -374,7 +375,8 @@ async function searchUsersByQuery(rawQuery, { excludeUserId, limit = 24 }) {
   const pattern = `%${q}%`;
   const result = await query(
     `SELECT u.id,
-            COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS username
+            COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS username,
+            u.avatar_url AS "avatarUrl"
      FROM users u
      WHERE u.id <> $1
        AND (

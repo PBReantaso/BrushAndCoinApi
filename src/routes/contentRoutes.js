@@ -23,6 +23,7 @@ router.delete('/events/:id', requireAuth, contentController.deleteEvent);
 router.get('/posts/feed', requireAuth, contentController.feedPosts);
 router.get('/posts/mine', requireAuth, contentController.myPosts);
 router.get('/posts/tagged', requireAuth, contentController.taggedPosts);
+router.post('/merchandise', requireAuth, contentController.createMerchandise);
 router.post('/posts', requireAuth, contentController.createPost);
 router.patch('/posts/:id', requireAuth, contentController.updatePost);
 router.post('/posts/:id/likes', requireAuth, contentController.likePost);

@@ -179,10 +179,29 @@ async function getUserPosts(profileUserId, viewer) {
   return { posts };
 }
 
+async function getUserMerchandise(profileUserId, viewer) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid user id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const exists = await authRepository.findPublicUserById(id);
+  if (!exists) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const viewerId = Number(viewer?.id) || 0;
+  const merchandise = await contentRepository.listMerchandiseForProfile(id, viewerId);
+  return { merchandise };
+}
+
 module.exports = {
   searchUsers,
   getPublicProfile,
   getUserPosts,
+  getUserMerchandise,
   followUser,
   unfollowUser,
   getFollowersList,

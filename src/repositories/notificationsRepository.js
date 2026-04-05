@@ -129,6 +129,32 @@ async function markNotificationRead(notificationId, userId) {
   return result.rowCount > 0;
 }
 
+async function markAllNotificationsRead(userId) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return 0;
+
+  const nowIso = new Date().toISOString();
+
+  if (!isPostgresEnabled()) {
+    let n = 0;
+    for (const row of memoryStore.notifications) {
+      if (Number(row.userId) === uid && row.readAt == null) {
+        row.readAt = nowIso;
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  const result = await query(
+    `UPDATE notifications
+     SET read_at = NOW()
+     WHERE user_id = $1 AND read_at IS NULL`,
+    [uid],
+  );
+  return result.rowCount ?? 0;
+}
+
 async function upsertPushDevice(userId, fcmToken, platform) {
   const uid = Number(userId);
   if (!Number.isFinite(uid) || uid <= 0) return false;
@@ -192,6 +218,7 @@ module.exports = {
   listNotificationsForUser,
   unreadCountForUser,
   markNotificationRead,
+  markAllNotificationsRead,
   upsertPushDevice,
   deletePushDevice,
 };

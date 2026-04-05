@@ -71,6 +71,8 @@ const memoryStore = {
   posts: [],
   postLikes: [],
   postComments: [],
+  /** @type {{ id: number, userId: number, title: string, description?: string, imageUrl: string|null, createdAt: string }[]} */
+  merchandise: [],
   /** @type {{ id: number, conversationId: number, senderId: number, content: string, createdAt: string }[]} */
   messages: [],
   /** @type {{ conversationId: number, userId: number, lastReadAt: string }[]} */

@@ -236,6 +236,13 @@ async function listConversationsByUser(userId) {
           }
         }
 
+        const otherUserForAvatar =
+          otherParticipants.length > 0 ? otherParticipants[0] : null;
+        const rawAvatar = otherUserForAvatar
+          ? String(otherUserForAvatar.avatarUrl ?? otherUserForAvatar.avatar_url ?? '').trim()
+          : '';
+        const otherUserAvatarUrl = rawAvatar.length > 0 ? rawAvatar : null;
+
         const conversationMessages = (memoryStore.messages || []).filter(
           (m) => Number(m.conversationId) === conversationId,
         );
@@ -258,6 +265,7 @@ async function listConversationsByUser(userId) {
         return {
           id: conversation.id,
           name: otherName,
+          otherUserAvatarUrl,
           lastMessage: conversation.lastMessage,
           lastMessageDate: conversation.lastMessageDate,
           hasUnreadMessages,
@@ -284,6 +292,7 @@ async function listConversationsByUser(userId) {
     SELECT DISTINCT
       c.id,
       COALESCE(NULLIF(u_other.username, ''), split_part(u_other.email, '@', 1), c.name) AS name,
+      u_other.avatar_url AS "otherUserAvatarUrl",
       c.last_message AS "lastMessage",
       c.last_message_date AS "lastMessageDate",
       c.commission_id AS "commissionId",
@@ -1175,6 +1184,7 @@ async function listFeedPosts(userId) {
       p.tags,
       p.image_url AS "imageUrl",
       p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
       COALESCE(lc.like_count, 0)::int AS "likeCount",
       COALESCE(cc.comment_count, 0)::int AS "commentCount",
       EXISTS(
@@ -1258,6 +1268,7 @@ async function listPostsByTag(userId, rawTag) {
       p.tags,
       p.image_url AS "imageUrl",
       p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
       COALESCE(lc.like_count, 0)::int AS "likeCount",
       COALESCE(cc.comment_count, 0)::int AS "commentCount",
       EXISTS(
@@ -1334,6 +1345,7 @@ async function listMyPosts(userId) {
       p.tags,
       p.image_url AS "imageUrl",
       p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
       COALESCE(lc.like_count, 0)::int AS "likeCount",
       COALESCE(cc.comment_count, 0)::int AS "commentCount",
       EXISTS(
@@ -1399,6 +1411,7 @@ async function listPostsForProfile(profileUserId, viewerUserId) {
       p.tags,
       p.image_url AS "imageUrl",
       p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
       COALESCE(lc.like_count, 0)::int AS "likeCount",
       COALESCE(cc.comment_count, 0)::int AS "commentCount",
       EXISTS(
@@ -1422,6 +1435,82 @@ async function listPostsForProfile(profileUserId, viewerUserId) {
     [profileUserId, viewerUserId],
   );
   return result.rows;
+}
+
+async function listMerchandiseForProfile(profileUserId, viewerUserId) {
+  if (!(await canViewerSeeProfilePosts(profileUserId, viewerUserId))) {
+    return [];
+  }
+
+  if (!isPostgresEnabled()) {
+    return memoryStore.merchandise
+      .filter((m) => Number(m.userId) === Number(profileUserId))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        title: m.title,
+        description: m.description ?? '',
+        imageUrl: m.imageUrl ?? null,
+        createdAt: m.createdAt,
+      }));
+  }
+
+  const result = await query(
+    `SELECT
+      m.id,
+      m.user_id AS "userId",
+      m.title,
+      m.description,
+      m.image_url AS "imageUrl",
+      m.created_at AS "createdAt"
+    FROM merchandise m
+    WHERE m.user_id = $1
+    ORDER BY m.created_at DESC`,
+    [profileUserId],
+  );
+  return result.rows;
+}
+
+async function createMerchandise({ userId, title, description, imageUrl }) {
+  const uid = Number(userId);
+  const t = String(title ?? '').trim();
+  if (!Number.isFinite(uid) || uid <= 0 || !t) {
+    return null;
+  }
+  const desc = String(description ?? '').trim();
+
+  if (!isPostgresEnabled()) {
+    const nextId =
+      memoryStore.merchandise.length > 0
+        ? Math.max(...memoryStore.merchandise.map((m) => m.id)) + 1
+        : 1;
+    const row = {
+      id: nextId,
+      userId: uid,
+      title: t,
+      description: desc,
+      imageUrl: imageUrl == null || imageUrl === '' ? null : String(imageUrl),
+      createdAt: new Date().toISOString(),
+    };
+    memoryStore.merchandise.push(row);
+    return {
+      id: row.id,
+      userId: row.userId,
+      title: row.title,
+      description: row.description,
+      imageUrl: row.imageUrl,
+      createdAt: row.createdAt,
+    };
+  }
+
+  const result = await query(
+    `INSERT INTO merchandise (user_id, title, description, image_url)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, user_id AS "userId", title, description, image_url AS "imageUrl", created_at AS "createdAt"`,
+    [uid, t, desc, imageUrl == null || imageUrl === '' ? null : String(imageUrl)],
+  );
+  return result.rows[0] ?? null;
 }
 
 async function fetchFeedPostByIdForViewer(postId, viewerUserId) {
@@ -1470,6 +1559,7 @@ async function fetchFeedPostByIdForViewer(postId, viewerUserId) {
       p.tags,
       p.image_url AS "imageUrl",
       p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
       COALESCE(lc.like_count, 0)::int AS "likeCount",
       COALESCE(cc.comment_count, 0)::int AS "commentCount",
       EXISTS(
@@ -1515,12 +1605,13 @@ async function updatePostByOwner(postId, ownerUserId, title, description) {
     if (!post || Number(post.userId) !== oid) return null;
     post.title = title;
     post.description = description;
+    post.editedAt = new Date().toISOString();
     return fetchFeedPostByIdForViewer(pid, oid);
   }
 
   const upd = await query(
     `UPDATE posts
-     SET title = $1, description = $2
+     SET title = $1, description = $2, edited_at = NOW()
      WHERE id = $3 AND user_id = $4`,
     [title, description, pid, oid],
   );
@@ -1554,6 +1645,7 @@ async function createPost({
       tags,
       imageUrl: imageUrl ?? null,
       createdAt: new Date().toISOString(),
+      editedAt: null,
       likeCount: 0,
       commentCount: 0,
       likedByMe: false,
@@ -1587,6 +1679,7 @@ async function createPost({
       tags,
       image_url AS "imageUrl",
       created_at AS "createdAt",
+      edited_at AS "editedAt",
       0::int AS "likeCount",
       0::int AS "commentCount",
       FALSE AS "likedByMe"`,
@@ -1757,6 +1850,8 @@ module.exports = {
   listMyPosts,
   listPostsByTag,
   listPostsForProfile,
+  listMerchandiseForProfile,
+  createMerchandise,
   createPost,
   fetchFeedPostByIdForViewer,
   updatePostByOwner,

@@ -27,6 +27,15 @@ async function markRead(req, res, next) {
   }
 }
 
+async function markAllRead(req, res, next) {
+  try {
+    const payload = await notificationsService.markAllRead(req.user.id);
+    return res.json(payload);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function registerDevice(req, res, next) {
   try {
     const payload = await notificationsService.registerDevice(req.user.id, req.body ?? {});
@@ -63,6 +72,7 @@ module.exports = {
   listNotifications,
   getUnreadCount,
   markRead,
+  markAllRead,
   registerDevice,
   unregisterDevice,
   createSystemAnnouncement,

@@ -46,6 +46,15 @@ async function getPosts(req, res, next) {
   }
 }
 
+async function getMerchandise(req, res, next) {
+  try {
+    const payload = await usersService.getUserMerchandise(req.params.id, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getFollowers(req, res, next) {
   try {
     const payload = await usersService.getFollowersList(req.params.id, req.user);
@@ -68,6 +77,7 @@ module.exports = {
   search,
   getProfile,
   getPosts,
+  getMerchandise,
   follow,
   unfollow,
   getFollowers,

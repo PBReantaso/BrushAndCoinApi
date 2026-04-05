@@ -40,6 +40,30 @@ async function getCommission(commissionId, user) {
   return { commission: commissionsRepository.toApiCommission(row) };
 }
 
+/** Clears unread-for-viewer on the commission list (same as opening the thread in chat). */
+async function markCommissionViewed(commissionId, user) {
+  const userId = Number(user?.id);
+  const cid = Number(commissionId);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const err = new Error('Authentication required.');
+    err.statusCode = 401;
+    throw err;
+  }
+  if (!Number.isFinite(cid) || cid <= 0) {
+    const err = new Error('Invalid commission id.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const row = await commissionsRepository.findCommissionByIdForUser(cid, userId);
+  if (!row) {
+    const err = new Error('Commission not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  await commissionsRepository.markCommissionThreadViewed(cid, userId);
+  return { ok: true };
+}
+
 async function createCommission(input, user) {
   const patronId = Number(user?.id);
   if (!Number.isFinite(patronId) || patronId <= 0) {
@@ -322,6 +346,7 @@ async function updateCommissionStatus(commissionId, input, user) {
 module.exports = {
   listCommissions,
   getCommission,
+  markCommissionViewed,
   createCommission,
   updateCommissionStatus,
 };

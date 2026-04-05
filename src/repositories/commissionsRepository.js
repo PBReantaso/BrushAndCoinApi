@@ -37,6 +37,8 @@ function mapRow(row) {
     patronId: row.patron_id ?? row.patronId,
     artistId: row.artist_id ?? row.artistId,
     artistUsername: row.artist_username ?? row.artistUsername ?? null,
+    artistAvatarUrl: row.artist_avatar_url ?? row.artistAvatarUrl ?? null,
+    patronAvatarUrl: row.patron_avatar_url ?? row.patronAvatarUrl ?? null,
     title: row.title,
     clientName: row.client_name ?? row.clientName,
     description: row.description ?? '',
@@ -111,6 +113,8 @@ function toApiCommission(m) {
     patronId: m.patronId,
     artistId: m.artistId,
     artistUsername: m.artistUsername ?? null,
+    artistAvatarUrl: m.artistAvatarUrl ?? null,
+    patronAvatarUrl: m.patronAvatarUrl ?? null,
     title: m.title,
     clientName: m.clientName,
     status: m.status,
@@ -148,6 +152,7 @@ async function listCommissionsForUser(userId) {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .map((c) => {
         const artist = memoryStore.users.find((u) => Number(u.id) === Number(c.artistId));
+        const patron = memoryStore.users.find((u) => Number(u.id) === Number(c.patronId));
         const artistUsername = artist
           ? String(artist.username || '').trim() ||
             String(artist.email || '')
@@ -158,6 +163,8 @@ async function listCommissionsForUser(userId) {
         const row = {
           ...c,
           artistUsername,
+          artistAvatarUrl: artist?.avatarUrl ?? null,
+          patronAvatarUrl: patron?.avatarUrl ?? null,
           hasUnreadMessages:
             Number(c.artistId) === uid ? Boolean(c.unreadForArtist) : Boolean(c.unreadForPatron),
         };
@@ -171,6 +178,8 @@ async function listCommissionsForUser(userId) {
       c.patron_id AS "patronId",
       c.artist_id AS "artistId",
       COALESCE(NULLIF(TRIM(ua.username), ''), split_part(ua.email, '@', 1), 'Artist') AS "artistUsername",
+      ua.avatar_url AS "artistAvatarUrl",
+      up.avatar_url AS "patronAvatarUrl",
       c.title,
       c.client_name AS "clientName",
       c.description,
@@ -200,6 +209,7 @@ async function listCommissionsForUser(userId) {
       c.submission_images AS "submissionImages"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
+    LEFT JOIN users up ON up.id = c.patron_id
     WHERE c.patron_id = $1 OR c.artist_id = $1
     ORDER BY c.created_at DESC, c.id DESC`,
     [uid],
@@ -215,6 +225,7 @@ async function findCommissionById(id) {
     const m = memoryStore.commissions.find((c) => Number(c.id) === cid);
     if (!m) return null;
     const artist = memoryStore.users.find((u) => Number(u.id) === Number(m.artistId));
+    const patron = memoryStore.users.find((u) => Number(u.id) === Number(m.patronId));
     const artistUsername = artist
       ? String(artist.username || '').trim() ||
         String(artist.email || '')
@@ -222,7 +233,12 @@ async function findCommissionById(id) {
           .trim() ||
         null
       : null;
-    return { ...m, artistUsername };
+    return {
+      ...m,
+      artistUsername,
+      artistAvatarUrl: artist?.avatarUrl ?? null,
+      patronAvatarUrl: patron?.avatarUrl ?? null,
+    };
   }
 
   const result = await query(
@@ -231,6 +247,8 @@ async function findCommissionById(id) {
       c.patron_id AS "patronId",
       c.artist_id AS "artistId",
       COALESCE(NULLIF(TRIM(ua.username), ''), split_part(ua.email, '@', 1), 'Artist') AS "artistUsername",
+      ua.avatar_url AS "artistAvatarUrl",
+      up.avatar_url AS "patronAvatarUrl",
       c.title,
       c.client_name AS "clientName",
       c.description,
@@ -256,6 +274,7 @@ async function findCommissionById(id) {
       c.submission_images AS "submissionImages"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
+    LEFT JOIN users up ON up.id = c.patron_id
     WHERE c.id = $1 LIMIT 1`,
     [cid],
   );

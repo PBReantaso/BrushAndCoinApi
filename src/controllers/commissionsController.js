@@ -18,6 +18,15 @@ async function getCommission(req, res, next) {
   }
 }
 
+async function markCommissionViewed(req, res, next) {
+  try {
+    const payload = await commissionsService.markCommissionViewed(req.params.id, req.user);
+    return res.json(payload);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function createCommission(req, res, next) {
   try {
     const payload = await commissionsService.createCommission(req.body ?? {}, req.user);
@@ -43,6 +52,7 @@ async function updateCommissionStatus(req, res, next) {
 module.exports = {
   listCommissions,
   getCommission,
+  markCommissionViewed,
   createCommission,
   updateCommissionStatus,
 };

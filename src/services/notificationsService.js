@@ -52,6 +52,11 @@ async function markRead(notificationId, userId) {
   return { success: true };
 }
 
+async function markAllRead(userId) {
+  const marked = await notificationsRepository.markAllNotificationsRead(userId);
+  return { success: true, marked };
+}
+
 async function registerDevice(userId, input) {
   const ok = await notificationsRepository.upsertPushDevice(
     userId,
@@ -370,6 +375,7 @@ module.exports = {
   listForUser,
   unreadCount,
   markRead,
+  markAllRead,
   registerDevice,
   unregisterDevice,
   notifyNewMessage,

@@ -188,6 +188,15 @@ async function taggedPosts(req, res, next) {
   }
 }
 
+async function createMerchandise(req, res, next) {
+  try {
+    const payload = await contentService.createMerchandiseItem(req.body ?? {}, req.user);
+    res.status(201).json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createPost(req, res, next) {
   try {
     const payload = await contentService.createPost(req.body ?? {}, req.user);
@@ -263,6 +272,7 @@ module.exports = {
   feedPosts,
   myPosts,
   taggedPosts,
+  createMerchandise,
   createPost,
   updatePost,
   likePost,
