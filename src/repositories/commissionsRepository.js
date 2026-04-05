@@ -17,6 +17,18 @@ function mapRow(row) {
         : [];
   const images = Array.isArray(ref) ? ref : typeof ref === 'string' ? JSON.parse(ref || '[]') : [];
 
+  const rawSub =
+    row.submission_images != null
+      ? row.submission_images
+      : row.submissionImages != null
+        ? row.submissionImages
+        : [];
+  const subParsed = Array.isArray(rawSub)
+    ? rawSub
+    : typeof rawSub === 'string'
+      ? JSON.parse(rawSub || '[]')
+      : [];
+
   const hasExplicitUnread = Object.prototype.hasOwnProperty.call(row, 'hasUnreadMessages');
   const unreadLegacy = Boolean(row.unreadMessages || row.hasNewMessages || row.has_unread_messages);
 
@@ -37,6 +49,7 @@ function mapRow(row) {
     specialRequirements: row.special_requirements ?? row.specialRequirements ?? '',
     isUrgent: Boolean(row.is_urgent ?? row.isUrgent),
     referenceImages: images,
+    submissionImages: subParsed.map((s) => String(s)),
     totalAmount: Number(row.total_amount ?? row.totalAmount ?? 0),
     status: normalizeDbCommissionStatus(row.status),
     milestones: Array.isArray(row.milestones) ? row.milestones : [],
@@ -44,6 +57,11 @@ function mapRow(row) {
     lastMessageAt: row.last_message_at ?? row.lastMessageAt ?? null,
     completedAt: row.completed_at ?? row.completedAt ?? null,
     submissionRound: Number(row.submission_round ?? row.submissionRound ?? 0),
+    paymentMethod: row.payment_method ?? row.paymentMethod ?? null,
+    escrowStatus: String(row.escrow_status ?? row.escrowStatus ?? 'none'),
+    escrowFundedAt: row.escrow_funded_at ?? row.escrowFundedAt ?? null,
+    escrowReleasedAt: row.escrow_released_at ?? row.escrowReleasedAt ?? null,
+    preferredPaymentMethod: row.preferred_payment_method ?? row.preferredPaymentMethod ?? null,
   };
 }
 
@@ -53,8 +71,42 @@ function toIso(v) {
   return String(v);
 }
 
-function toApiCommission(m) {
+/**
+ * In-app simulated escrow: "funds" are tracked on the commission until completion/refund.
+ * Replace with PSP webhooks + ledger when going to production.
+ */
+function buildEscrowSimulation(m) {
+  const escrowStatus = String(m.escrowStatus ?? 'none');
+  const total = Number(m.totalAmount ?? 0);
+  const rounded = Math.round(total * 100) / 100;
+
+  let phase = 'awaiting_funding';
+  if (escrowStatus === 'funded') phase = 'held';
+  else if (escrowStatus === 'released') phase = 'released_to_artist';
+  else if (escrowStatus === 'refunded') phase = 'refunded_to_patron';
+
+  const held = escrowStatus === 'funded' ? rounded : 0;
+  const released = escrowStatus === 'released' ? rounded : 0;
+  const refunded = escrowStatus === 'refunded' ? rounded : 0;
+
   return {
+    mode: 'simulated',
+    currency: 'PHP',
+    phase,
+    commissionTotal: rounded,
+    heldInEscrow: held,
+    releasedToArtist: released,
+    refundedToPatron: refunded,
+    releaseGoal:
+      'Funds move from simulated escrow to the artist when the commission is marked completed.',
+    refundNote: 'If the commission is rejected after funding, simulated escrow is marked refunded to the patron.',
+    disclaimer:
+      'Brush&Coin simulates holding and releasing funds in-app. No real money is stored until you connect a payment provider.',
+  };
+}
+
+function toApiCommission(m) {
+  const base = {
     id: m.id,
     patronId: m.patronId,
     artistId: m.artistId,
@@ -71,12 +123,19 @@ function toApiCommission(m) {
     specialRequirements: m.specialRequirements,
     isUrgent: m.isUrgent,
     referenceImages: m.referenceImages,
+    submissionImages: Array.isArray(m.submissionImages) ? m.submissionImages : [],
     totalAmount: m.totalAmount,
     createdAt: toIso(m.createdAt),
     lastMessageAt: toIso(m.lastMessageAt),
     completedAt: toIso(m.completedAt),
     submissionRound: Number(m.submissionRound ?? 0),
+    paymentMethod: m.paymentMethod ?? null,
+    escrowStatus: m.escrowStatus ?? 'none',
+    escrowFundedAt: toIso(m.escrowFundedAt),
+    escrowReleasedAt: toIso(m.escrowReleasedAt),
+    preferredPaymentMethod: m.preferredPaymentMethod ?? null,
   };
+  return { ...base, escrowSimulation: buildEscrowSimulation(m) };
 }
 
 async function listCommissionsForUser(userId) {
@@ -132,7 +191,13 @@ async function listCommissionsForUser(userId) {
       c.completed_at AS "completedAt",
       c.unread_for_artist AS "unreadForArtist",
       c.unread_for_patron AS "unreadForPatron",
-      c.submission_round AS "submissionRound"
+      c.submission_round AS "submissionRound",
+      c.payment_method AS "paymentMethod",
+      c.escrow_status AS "escrowStatus",
+      c.escrow_funded_at AS "escrowFundedAt",
+      c.escrow_released_at AS "escrowReleasedAt",
+      c.preferred_payment_method AS "preferredPaymentMethod",
+      c.submission_images AS "submissionImages"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
     WHERE c.patron_id = $1 OR c.artist_id = $1
@@ -182,7 +247,13 @@ async function findCommissionById(id) {
       c.completed_at AS "completedAt",
       c.unread_for_artist AS "unreadForArtist",
       c.unread_for_patron AS "unreadForPatron",
-      c.submission_round AS "submissionRound"
+      c.submission_round AS "submissionRound",
+      c.payment_method AS "paymentMethod",
+      c.escrow_status AS "escrowStatus",
+      c.escrow_funded_at AS "escrowFundedAt",
+      c.escrow_released_at AS "escrowReleasedAt",
+      c.preferred_payment_method AS "preferredPaymentMethod",
+      c.submission_images AS "submissionImages"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
     WHERE c.id = $1 LIMIT 1`,
@@ -223,6 +294,10 @@ async function createCommission(data) {
     referenceImages: Array.isArray(data.referenceImages) ? data.referenceImages.map(String) : [],
     totalAmount: Number(data.totalAmount ?? 0),
     status: 'pending',
+    preferredPaymentMethod:
+      data.preferredPaymentMethod == null || String(data.preferredPaymentMethod).trim() === ''
+        ? null
+        : String(data.preferredPaymentMethod).trim().toLowerCase(),
   };
 
   if (!isPostgresEnabled()) {
@@ -236,6 +311,12 @@ async function createCommission(data) {
       lastMessageAt: null,
       completedAt: null,
       submissionRound: 0,
+      submissionImages: [],
+      paymentMethod: null,
+      escrowStatus: 'none',
+      escrowFundedAt: null,
+      escrowReleasedAt: null,
+      preferredPaymentMethod: row.preferredPaymentMethod ?? null,
     };
     memoryStore.commissions.push(m);
     return m;
@@ -244,8 +325,8 @@ async function createCommission(data) {
   const insertSql = `INSERT INTO commissions (
       patron_id, artist_id, title, client_name, description, budget, deadline,
       special_requirements, is_urgent, reference_images, total_amount, status,
-      unread_for_artist, unread_for_patron
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::text, TRUE, FALSE)
+      unread_for_artist, unread_for_patron, preferred_payment_method
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::text, TRUE, FALSE, $13)
     RETURNING
       id,
       patron_id AS "patronId",
@@ -267,7 +348,12 @@ async function createCommission(data) {
       completed_at AS "completedAt",
       unread_for_artist AS "unreadForArtist",
       unread_for_patron AS "unreadForPatron",
-      submission_round AS "submissionRound"`;
+      submission_round AS "submissionRound",
+      payment_method AS "paymentMethod",
+      escrow_status AS "escrowStatus",
+      escrow_funded_at AS "escrowFundedAt",
+      escrow_released_at AS "escrowReleasedAt",
+      preferred_payment_method AS "preferredPaymentMethod"`;
 
   const insertParams = [
     patronId,
@@ -284,7 +370,11 @@ async function createCommission(data) {
   ];
 
   try {
-    const result = await query(insertSql, [...insertParams, 'pending']);
+    const result = await query(insertSql, [
+      ...insertParams,
+      'pending',
+      row.preferredPaymentMethod,
+    ]);
     return mapRow(result.rows[0]);
   } catch (e) {
     const msg = String(e?.message || '');
@@ -293,7 +383,11 @@ async function createCommission(data) {
       msg.includes('commissions_status_check') &&
       msg.includes('commissions')
     ) {
-      const result = await query(insertSql, [...insertParams, 'inquiry']);
+      const result = await query(insertSql, [
+        ...insertParams,
+        'inquiry',
+        row.preferredPaymentMethod,
+      ]);
       return mapRow(result.rows[0]);
     }
     throw e;
@@ -302,15 +396,16 @@ async function createCommission(data) {
 
 const ALLOWED_ARTIST = {
   pending: ['accepted', 'rejected'],
+  /** After patron funds escrow, revision rounds may return status to accepted — artist can submit again only when escrow is already funded (see guard below). */
   accepted: ['inProgress', 'rejected'],
-  inProgress: ['rejected'],
+  /** First work after payment: inProgress → inProgress bumps submission_round. */
+  inProgress: ['inProgress', 'rejected'],
   completed: [],
   rejected: [],
 };
 
-/** Patron: mock pay after request (pending) or after artist accept; then complete or reject draft. */
+/** Patron: fund escrow only after artist accepts (pending → inProgress is not allowed). */
 const ALLOWED_PATRON = {
-  pending: ['inProgress'],
   accepted: ['inProgress'],
   inProgress: ['completed', 'accepted'],
 };
@@ -337,9 +432,15 @@ const RETURNING_COMMISSION = `RETURNING
       completed_at AS "completedAt",
       unread_for_artist AS "unreadForArtist",
       unread_for_patron AS "unreadForPatron",
-      submission_round AS "submissionRound"`;
+      submission_round AS "submissionRound",
+      payment_method AS "paymentMethod",
+      escrow_status AS "escrowStatus",
+      escrow_funded_at AS "escrowFundedAt",
+      escrow_released_at AS "escrowReleasedAt",
+      preferred_payment_method AS "preferredPaymentMethod",
+      submission_images AS "submissionImages"`;
 
-async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
+async function updateCommissionStatus(commissionId, newStatus, actingUserId, options = {}) {
   const cid = Number(commissionId);
   const uid = Number(actingUserId);
   const status = String(newStatus ?? '').trim();
@@ -385,6 +486,56 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
     }
   }
 
+  /** First-time: artist must not move accepted → inProgress until patron has funded escrow (patron pays after accept). Revision: patron may return to accepted with escrow still funded. */
+  if (
+    isArtist &&
+    currentNormalized === 'accepted' &&
+    nextStatus === 'inProgress' &&
+    String(existing.escrowStatus || 'none') !== 'funded'
+  ) {
+    return { ok: false, reason: 'awaiting_patron_payment' };
+  }
+
+  const paymentMethodRaw = String(options.paymentMethod ?? '').trim().toLowerCase();
+  const allowedPm = new Set(['gcash', 'paymaya', 'paypal', 'stripe']);
+  const prevEscrow = String(existing.escrowStatus || 'none');
+
+  if (isPatron && nextStatus === 'inProgress') {
+    if (!allowedPm.has(paymentMethodRaw)) {
+      return { ok: false, reason: 'payment_method_required' };
+    }
+  }
+
+  const submissionList = Array.isArray(existing.submissionImages) ? existing.submissionImages : [];
+  const hasDeliverable =
+    submissionList.length > 0 || Number(existing.submissionRound ?? 0) > 0;
+
+  if (isPatron && nextStatus === 'completed' && currentNormalized === 'inProgress') {
+    if (!hasDeliverable) {
+      return { ok: false, reason: 'no_submission_to_complete' };
+    }
+  }
+
+  const fundEscrow = isPatron && nextStatus === 'inProgress';
+  /** Patron completing after review: release simulated escrow when funded, or when deliverables exist but status was not flipped to funded (recovery). */
+  const releaseEscrow =
+    nextStatus === 'completed' &&
+    isPatron &&
+    prevEscrow !== 'released' &&
+    prevEscrow !== 'refunded' &&
+    (prevEscrow === 'funded' || (prevEscrow === 'none' && hasDeliverable));
+  const refundEscrow = nextStatus === 'rejected' && prevEscrow === 'funded';
+  const bumpSubmission =
+    (isArtist && currentNormalized === 'accepted' && nextStatus === 'inProgress') ||
+    (isArtist && currentNormalized === 'inProgress' && nextStatus === 'inProgress');
+
+  if (bumpSubmission) {
+    const urls = options.submissionImageUrls;
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return { ok: false, reason: 'submission_images_required' };
+    }
+  }
+
   if (!isPostgresEnabled()) {
     const m = memoryStore.commissions.find((c) => Number(c.id) === cid);
     if (!m) {
@@ -396,16 +547,25 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
     if (isArtist && Number(m.artistId) !== uid) {
       return { ok: false, reason: 'forbidden' };
     }
-    if (
-      isArtist &&
-      currentNormalized === 'accepted' &&
-      nextStatus === 'inProgress'
-    ) {
+    if (bumpSubmission) {
       m.submissionRound = Number(m.submissionRound ?? 0) + 1;
+      m.submissionImages = options.submissionImageUrls;
     }
     m.status = nextStatus;
     if (nextStatus === 'completed') {
       m.completedAt = new Date().toISOString();
+    }
+    if (fundEscrow) {
+      m.paymentMethod = paymentMethodRaw;
+      m.escrowStatus = 'funded';
+      m.escrowFundedAt = new Date().toISOString();
+    }
+    if (releaseEscrow) {
+      m.escrowStatus = 'released';
+      m.escrowReleasedAt = new Date().toISOString();
+    }
+    if (refundEscrow) {
+      m.escrowStatus = 'refunded';
     }
     const artist = memoryStore.users.find((u) => Number(u.id) === Number(m.artistId));
     const artistUsername = artist
@@ -419,16 +579,38 @@ async function updateCommissionStatus(commissionId, newStatus, actingUserId) {
   }
 
   const whereRole = isPatron ? 'patron_id' : 'artist_id';
-  const completedFragment =
-    nextStatus === 'completed' ? ', completed_at = CURRENT_TIMESTAMP' : '';
-  const bumpSubmission =
-    isArtist && currentNormalized === 'accepted' && nextStatus === 'inProgress'
-      ? ', submission_round = submission_round + 1'
-      : '';
+  const submissionJson = JSON.stringify(
+    Array.isArray(options.submissionImageUrls) ? options.submissionImageUrls : [],
+  );
+
   const result = await query(
-    `UPDATE commissions SET status = $2${completedFragment}${bumpSubmission} WHERE id = $1 AND ${whereRole} = $3
+    `UPDATE commissions SET
+      status = $2::text,
+      completed_at = CASE WHEN $2::text = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+      submission_round = CASE WHEN $8::boolean THEN submission_round + 1 ELSE submission_round END,
+      submission_images = CASE WHEN $8::boolean THEN $9::jsonb ELSE submission_images END,
+      payment_method = CASE WHEN $4::boolean THEN $5::text ELSE payment_method END,
+      escrow_status = CASE
+        WHEN $4::boolean THEN 'funded'
+        WHEN $6::boolean THEN 'released'
+        WHEN $7::boolean THEN 'refunded'
+        ELSE escrow_status
+      END,
+      escrow_funded_at = CASE WHEN $4::boolean THEN CURRENT_TIMESTAMP ELSE escrow_funded_at END,
+      escrow_released_at = CASE WHEN $6::boolean THEN CURRENT_TIMESTAMP ELSE escrow_released_at END
+    WHERE id = $1 AND ${whereRole} = $3
     ${RETURNING_COMMISSION}`,
-    [cid, nextStatus, uid],
+    [
+      cid,
+      nextStatus,
+      uid,
+      fundEscrow,
+      paymentMethodRaw,
+      releaseEscrow,
+      refundEscrow,
+      bumpSubmission,
+      submissionJson,
+    ],
   );
   if (!result.rows[0]) {
     return { ok: false, reason: 'forbidden' };

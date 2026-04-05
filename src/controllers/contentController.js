@@ -197,6 +197,15 @@ async function createPost(req, res, next) {
   }
 }
 
+async function updatePost(req, res, next) {
+  try {
+    const payload = await contentService.updatePost(req.params.id, req.body ?? {}, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function likePost(req, res, next) {
   try {
     const payload = await contentService.likePost(req.params.id, req.user);
@@ -255,6 +264,7 @@ module.exports = {
   myPosts,
   taggedPosts,
   createPost,
+  updatePost,
   likePost,
   unlikePost,
   commentOnPost,

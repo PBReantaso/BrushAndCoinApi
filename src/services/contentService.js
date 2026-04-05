@@ -442,6 +442,42 @@ async function createPost(input, user) {
   return { post };
 }
 
+async function updatePost(postId, input, user) {
+  const id = Number(postId);
+  const userId = Number(user?.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid post id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const title = String(input?.title ?? '').trim();
+  if (!title) {
+    const error = new Error('Post title is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const description = String(input?.description ?? '');
+
+  const post = await contentRepository.updatePostByOwner(id, userId, title, description);
+  if (!post) {
+    const error = new Error('Post not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const mentionText = `${title}\n${description}`;
+  notificationsService.notifyMentionsInText(mentionText, user, 'post', { postId: post.id });
+
+  return { post };
+}
+
 async function likePost(postId, user) {
   const id = Number(postId);
   const userId = Number(user?.id);
@@ -548,6 +584,7 @@ module.exports = {
   getMyPosts,
   getTaggedPosts,
   createPost,
+  updatePost,
   likePost,
   unlikePost,
   commentOnPost,

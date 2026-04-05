@@ -25,6 +25,10 @@ npm run migrate
 
 If `DATABASE_URL` is not set, the app automatically falls back to in-memory seed data so the existing mobile app flow still works.
 
+### Database errors like `column "payment_method" does not exist`
+
+The API expects commission columns added in migrations `018`–`020`. Run `npm run migrate` again after pulling changes. If the error persists, connect with `psql` and ensure these columns exist on `commissions`: `payment_method`, `escrow_status`, `escrow_funded_at`, `escrow_released_at`, `preferred_payment_method` (all added with `IF NOT EXISTS` in those migrations).
+
 ## Project structure
 
 - `src/config` - environment + database connection

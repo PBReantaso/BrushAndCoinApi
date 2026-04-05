@@ -24,6 +24,7 @@ router.get('/posts/feed', requireAuth, contentController.feedPosts);
 router.get('/posts/mine', requireAuth, contentController.myPosts);
 router.get('/posts/tagged', requireAuth, contentController.taggedPosts);
 router.post('/posts', requireAuth, contentController.createPost);
+router.patch('/posts/:id', requireAuth, contentController.updatePost);
 router.post('/posts/:id/likes', requireAuth, contentController.likePost);
 router.delete('/posts/:id/likes', requireAuth, contentController.unlikePost);
 router.post('/posts/:id/comments', requireAuth, contentController.commentOnPost);

@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 
@@ -12,7 +13,8 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '3mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use(healthRoutes);
 app.use(contentRoutes);

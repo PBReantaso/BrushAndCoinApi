@@ -1424,6 +1424,110 @@ async function listPostsForProfile(profileUserId, viewerUserId) {
   return result.rows;
 }
 
+async function fetchFeedPostByIdForViewer(postId, viewerUserId) {
+  const pid = Number(postId);
+  const vid = Number(viewerUserId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(vid) || vid <= 0) {
+    return null;
+  }
+
+  if (!isPostgresEnabled()) {
+    const post = memoryStore.posts.find((p) => Number(p.id) === pid);
+    if (!post) return null;
+    const author = memoryStore.users.find((u) => Number(u.id) === Number(post.userId));
+    const authorPrivate = Boolean(author?.isPrivate);
+    const followsAuthor = memoryStore.follows.some(
+      (f) => Number(f.followerId) === vid && Number(f.followedId) === Number(post.userId),
+    );
+    const visible =
+      Number(post.userId) === vid || !authorPrivate || followsAuthor;
+    if (!visible) return null;
+    const likeCount = memoryStore.postLikes.filter((l) => l.postId === post.id).length;
+    const commentCount = memoryStore.postComments.filter((c) => c.postId === post.id).length;
+    const likedByMe = memoryStore.postLikes.some(
+      (l) => l.postId === post.id && l.userId === vid,
+    );
+    return {
+      ...post,
+      likeCount,
+      commentCount,
+      likedByMe,
+      authorAvatarUrl: author?.avatarUrl ?? null,
+    };
+  }
+
+  const result = await query(
+    `SELECT
+      p.id,
+      p.user_id AS "userId",
+      COALESCE(NULLIF(u.username, ''), split_part(u.email, '@', 1)) AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
+      p.title,
+      p.description,
+      p.category,
+      p.price,
+      p.is_commission_available AS "isCommissionAvailable",
+      p.tags,
+      p.image_url AS "imageUrl",
+      p.created_at AS "createdAt",
+      COALESCE(lc.like_count, 0)::int AS "likeCount",
+      COALESCE(cc.comment_count, 0)::int AS "commentCount",
+      EXISTS(
+        SELECT 1 FROM post_likes pl
+        WHERE pl.post_id = p.id AND pl.user_id = $1
+      ) AS "likedByMe"
+    FROM posts p
+    JOIN users u ON u.id = p.user_id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS like_count
+      FROM post_likes
+      GROUP BY post_id
+    ) lc ON lc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS comment_count
+      FROM post_comments
+      GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    WHERE p.id = $2
+      AND (
+        p.user_id = $1
+        OR COALESCE(u.is_private, FALSE) = FALSE
+        OR EXISTS (
+          SELECT 1 FROM follows f
+          WHERE f.follower_id = $1 AND f.followed_id = p.user_id
+        )
+      )
+    LIMIT 1`,
+    [vid, pid],
+  );
+  return result.rows[0] || null;
+}
+
+async function updatePostByOwner(postId, ownerUserId, title, description) {
+  const pid = Number(postId);
+  const oid = Number(ownerUserId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(oid) || oid <= 0) {
+    return null;
+  }
+
+  if (!isPostgresEnabled()) {
+    const post = memoryStore.posts.find((p) => Number(p.id) === pid);
+    if (!post || Number(post.userId) !== oid) return null;
+    post.title = title;
+    post.description = description;
+    return fetchFeedPostByIdForViewer(pid, oid);
+  }
+
+  const upd = await query(
+    `UPDATE posts
+     SET title = $1, description = $2
+     WHERE id = $3 AND user_id = $4`,
+    [title, description, pid, oid],
+  );
+  if (upd.rowCount === 0) return null;
+  return fetchFeedPostByIdForViewer(pid, oid);
+}
+
 async function createPost({
   userId,
   title,
@@ -1654,6 +1758,8 @@ module.exports = {
   listPostsByTag,
   listPostsForProfile,
   createPost,
+  fetchFeedPostByIdForViewer,
+  updatePostByOwner,
   findPostVisibleToUser,
   likePost,
   unlikePost,

@@ -3,6 +3,7 @@ const contentRepository = require('../repositories/contentRepository');
 const commissionsRepository = require('../repositories/commissionsRepository');
 const followsRepository = require('../repositories/followsRepository');
 const notificationsService = require('./notificationsService');
+const { saveSubmissionImages } = require('../utils/commissionSubmissionFiles');
 
 function actorDisplayName(user) {
   const u = user?.username;
@@ -84,6 +85,18 @@ async function createCommission(input, user) {
     throw err;
   }
 
+  const rawPreferred = String(input?.preferredPaymentMethod ?? '').trim().toLowerCase();
+  const allowedPreferred = new Set(['gcash', 'paymaya', 'paypal', 'stripe']);
+  let preferredPaymentMethod = null;
+  if (rawPreferred) {
+    if (!allowedPreferred.has(rawPreferred)) {
+      const err = new Error('preferredPaymentMethod must be gcash, paymaya, paypal, or stripe.');
+      err.statusCode = 400;
+      throw err;
+    }
+    preferredPaymentMethod = rawPreferred;
+  }
+
   const created = await commissionsRepository.createCommission({
     patronId,
     artistId,
@@ -96,6 +109,7 @@ async function createCommission(input, user) {
     isUrgent: Boolean(input?.isUrgent),
     referenceImages: Array.isArray(input?.referenceImages) ? input.referenceImages : [],
     totalAmount: Number(input?.totalAmount ?? 0),
+    preferredPaymentMethod,
   });
 
   if (!created) {
@@ -134,7 +148,32 @@ async function updateCommissionStatus(commissionId, input, user) {
   const oldStatus =
     String(existing.status) === 'inquiry' ? 'pending' : String(existing.status);
 
-  const result = await commissionsRepository.updateCommissionStatus(commissionId, status, uid);
+  const nextStatusNormalized = status === 'inquiry' ? 'pending' : status;
+  const isArtist = Number(existing.artistId) === uid;
+  const bumpSubmission =
+    isArtist &&
+    nextStatusNormalized === 'inProgress' &&
+    ((oldStatus === 'accepted' && String(existing.escrowStatus || 'none') === 'funded') ||
+      oldStatus === 'inProgress');
+
+  let submissionImageUrls;
+  if (bumpSubmission) {
+    const parts = input.submissionImages;
+    submissionImageUrls = saveSubmissionImages(
+      Number(commissionId),
+      Array.isArray(parts) ? parts : [],
+    );
+    if (!submissionImageUrls || submissionImageUrls.length === 0) {
+      const err = new Error('At least one artwork image is required to submit work.');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  const result = await commissionsRepository.updateCommissionStatus(commissionId, status, uid, {
+    paymentMethod: input?.paymentMethod,
+    submissionImageUrls,
+  });
   if (!result.ok) {
     if (result.reason === 'not_found') {
       const err = new Error('Commission not found.');
@@ -146,6 +185,32 @@ async function updateCommissionStatus(commissionId, input, user) {
         'You are not allowed to update this commission.',
       );
       err.statusCode = 403;
+      throw err;
+    }
+    if (result.reason === 'payment_method_required') {
+      const err = new Error(
+        'Payment method is required. Funds are held in escrow until the commission is completed.',
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    if (result.reason === 'awaiting_patron_payment') {
+      const err = new Error(
+        'The patron must complete payment before you can submit work on this commission.',
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    if (result.reason === 'submission_images_required') {
+      const err = new Error('At least one artwork image is required to submit work.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (result.reason === 'no_submission_to_complete') {
+      const err = new Error(
+        'There is no submitted artwork to accept yet. Wait for the artist to submit work first.',
+      );
+      err.statusCode = 400;
       throw err;
     }
     if (result.reason === 'invalid_transition' || result.reason === 'invalid_status') {
@@ -163,21 +228,21 @@ async function updateCommissionStatus(commissionId, input, user) {
   const newStatus = String(result.commission.status);
 
   const patronConfirmedPayment =
-    uid === patronId &&
-    (oldStatus === 'accepted' || oldStatus === 'pending') &&
-    newStatus === 'inProgress';
+    uid === patronId && oldStatus === 'accepted' && newStatus === 'inProgress';
 
   if (patronConfirmedPayment && Number.isFinite(artistId) && artistId > 0) {
     notificationsService.notifyCommissionPatronConfirmedPayment(artistId, user, result.commission);
   }
 
-  if (
+  const artistSubmittedWork =
     uid === artistId &&
-    oldStatus === 'accepted' &&
-    newStatus === 'inProgress' &&
     Number.isFinite(artistId) &&
-    artistId > 0
-  ) {
+    artistId > 0 &&
+    newStatus === 'inProgress' &&
+    (oldStatus === 'inProgress' ||
+      (oldStatus === 'accepted' && String(existing.escrowStatus || 'none') === 'funded'));
+
+  if (artistSubmittedWork) {
     try {
       const round = Number(result.commission.submissionRound ?? 1);
       await contentRepository.appendWorkSubmittedNotice(commissionId, uid, round);
