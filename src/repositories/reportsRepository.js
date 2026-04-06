@@ -122,6 +122,40 @@ async function listReportsForAdmin(filters = {}) {
 
 /**
  * @param {number} id
+ * @returns {Promise<object|null>}
+ */
+async function getReportById(id) {
+  const pid = Number(id);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+
+  if (!isPostgresEnabled()) {
+    const r = memoryStore.reports.find((x) => Number(x.id) === pid);
+    return r ? _mapMemoryReport(r) : null;
+  }
+
+  const result = await query(
+    `SELECT
+       r.id,
+       r.reporter_id AS "reporterId",
+       COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1)) AS "reporterLabel",
+       r.target_kind AS "targetKind",
+       r.target_id AS "targetId",
+       r.reason,
+       r.created_at AS "createdAt",
+       r.status,
+       r.resolved_at AS "resolvedAt",
+       r.resolution_note AS "resolutionNote"
+     FROM reports r
+     JOIN users u ON u.id = r.reporter_id
+     WHERE r.id = $1
+     LIMIT 1`,
+    [pid],
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * @param {number} id
  * @param {{ status: string, resolutionNote: string | null }} payload
  */
 async function resolveReportById(id, payload) {
@@ -173,5 +207,6 @@ async function resolveReportById(id, payload) {
 module.exports = {
   addReport,
   listReportsForAdmin,
+  getReportById,
   resolveReportById,
 };

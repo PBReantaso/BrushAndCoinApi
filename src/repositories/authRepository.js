@@ -67,6 +67,7 @@ async function findUserByEmail(email) {
       ) || null;
     if (!u) return null;
     if (u.isAdmin === undefined) u.isAdmin = false;
+    if (u.bannedUntil === undefined) u.bannedUntil = null;
     return u;
   }
 
@@ -76,7 +77,8 @@ async function findUserByEmail(email) {
             COALESCE(first_name, '') AS "firstName",
             COALESCE(last_name, '') AS "lastName",
             avatar_url AS "avatarUrl",
-            COALESCE(is_admin, FALSE) AS "isAdmin"
+            COALESCE(is_admin, FALSE) AS "isAdmin",
+            banned_until AS "bannedUntil"
      FROM users
      WHERE LOWER(email) = LOWER($1)
      LIMIT 1`,
@@ -99,7 +101,7 @@ async function createUser({ email, password, username, isAdmin = false }) {
       email,
       username,
       password,
-      isPrivate: false,
+      isPrivate: Boolean(isAdmin),
       firstName: '',
       lastName: '',
       avatarUrl: null,
@@ -107,17 +109,21 @@ async function createUser({ email, password, username, isAdmin = false }) {
       tipsEnabled: false,
       tipsUrl: null,
       isAdmin: Boolean(isAdmin),
+      bannedUntil: null,
     };
     memoryStore.users.push(user);
     return user;
   }
 
   try {
+    const admin = Boolean(isAdmin);
     const result = await query(
-      `INSERT INTO users (email, username, password_hash, role, is_admin)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, username, COALESCE(is_admin, FALSE) AS "isAdmin"`,
-      [email, username, password, 'patron', Boolean(isAdmin)],
+      `INSERT INTO users (email, username, password_hash, role, is_admin, is_private)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, email, username,
+         COALESCE(is_admin, FALSE) AS "isAdmin",
+         COALESCE(is_private, FALSE) AS "isPrivate"`,
+      [email, username, password, 'patron', admin, admin],
     );
     return result.rows[0];
   } catch (e) {
@@ -142,6 +148,7 @@ async function findUserById(id) {
     if (u.tipsEnabled === undefined) u.tipsEnabled = false;
     if (u.tipsUrl === undefined) u.tipsUrl = null;
     if (u.isAdmin === undefined) u.isAdmin = false;
+    if (u.bannedUntil === undefined) u.bannedUntil = null;
     return u;
   }
 
@@ -154,7 +161,8 @@ async function findUserById(id) {
             COALESCE(social_links, '{"facebook":"","instagram":"","twitter":"","website":""}'::jsonb) AS "socialLinks",
             COALESCE(tips_enabled, FALSE) AS "tipsEnabled",
             tips_url AS "tipsUrl",
-            COALESCE(is_admin, FALSE) AS "isAdmin"
+            COALESCE(is_admin, FALSE) AS "isAdmin",
+            banned_until AS "bannedUntil"
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -167,7 +175,11 @@ async function findUserById(id) {
   return row || null;
 }
 
-async function setUserIsAdmin(userId, isAdmin) {
+/**
+ * @param {number} userId
+ * @param {Date | null} bannedUntil — `null` clears the ban
+ */
+async function setUserBannedUntil(userId, bannedUntil) {
   const uid = Number(userId);
   if (!Number.isFinite(uid) || uid <= 0) {
     return;
@@ -175,11 +187,44 @@ async function setUserIsAdmin(userId, isAdmin) {
   if (!isPostgresEnabled()) {
     const u = memoryStore.users.find((user) => Number(user.id) === uid);
     if (u) {
-      u.isAdmin = Boolean(isAdmin);
+      u.bannedUntil =
+        bannedUntil instanceof Date
+          ? bannedUntil.toISOString()
+          : bannedUntil == null
+            ? null
+            : String(bannedUntil);
     }
     return;
   }
-  await query('UPDATE users SET is_admin = $2 WHERE id = $1', [uid, Boolean(isAdmin)]);
+  await query('UPDATE users SET banned_until = $2 WHERE id = $1', [
+    uid,
+    bannedUntil instanceof Date ? bannedUntil : bannedUntil,
+  ]);
+}
+
+async function setUserIsAdmin(userId, isAdmin) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    return;
+  }
+  const flag = Boolean(isAdmin);
+  if (!isPostgresEnabled()) {
+    const u = memoryStore.users.find((user) => Number(user.id) === uid);
+    if (u) {
+      u.isAdmin = flag;
+      if (flag) {
+        u.isPrivate = true;
+      }
+    }
+    return;
+  }
+  await query(
+    `UPDATE users
+     SET is_admin = $2,
+         is_private = CASE WHEN $2::boolean THEN TRUE ELSE is_private END
+     WHERE id = $1`,
+    [uid, flag],
+  );
 }
 
 async function isUserPrivate(userId) {
@@ -507,6 +552,7 @@ module.exports = {
   findUserByEmail,
   createUser,
   findUserById,
+  setUserBannedUntil,
   setUserIsAdmin,
   updateUserProfileById,
   deleteUserById,

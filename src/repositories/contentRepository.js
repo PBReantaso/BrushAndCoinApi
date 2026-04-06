@@ -1593,6 +1593,90 @@ async function fetchFeedPostByIdForViewer(postId, viewerUserId) {
   return result.rows[0] || null;
 }
 
+/**
+ * Moderation: load posts by id with no visibility rules. Keys are string post ids.
+ * @param {number[]} ids
+ * @returns {Promise<Record<string, object>>}
+ */
+async function fetchPostsForAdminByIds(ids) {
+  const raw = Array.isArray(ids) ? ids : [];
+  const unique = [
+    ...new Set(
+      raw
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const inPlaceholders = unique.map((_, i) => `$${i + 1}`).join(', ');
+
+  if (!isPostgresEnabled()) {
+    const out = {};
+    for (const pid of unique) {
+      const post = memoryStore.posts.find((p) => Number(p.id) === pid);
+      if (!post) {
+        continue;
+      }
+      const author = memoryStore.users.find((u) => Number(u.id) === Number(post.userId));
+      const likeCount = memoryStore.postLikes.filter((l) => l.postId === post.id).length;
+      const commentCount = memoryStore.postComments.filter((c) => c.postId === post.id).length;
+      out[String(pid)] = {
+        ...post,
+        likeCount,
+        commentCount,
+        likedByMe: false,
+        authorAvatarUrl: author?.avatarUrl ?? null,
+      };
+    }
+    return out;
+  }
+
+  const result = await query(
+    `SELECT
+      p.id,
+      p.user_id AS "userId",
+      CASE
+        WHEN u.id IS NULL THEN 'Unknown user'
+        ELSE COALESCE(NULLIF(TRIM(u.username), ''), split_part(u.email, '@', 1))
+      END AS "authorName",
+      u.avatar_url AS "authorAvatarUrl",
+      p.title,
+      p.description,
+      p.category,
+      p.price,
+      p.is_commission_available AS "isCommissionAvailable",
+      p.tags,
+      p.image_url AS "imageUrl",
+      p.created_at AS "createdAt",
+      p.edited_at AS "editedAt",
+      COALESCE(lc.like_count, 0)::int AS "likeCount",
+      COALESCE(cc.comment_count, 0)::int AS "commentCount",
+      FALSE AS "likedByMe"
+    FROM posts p
+    LEFT JOIN users u ON u.id = p.user_id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS like_count
+      FROM post_likes
+      GROUP BY post_id
+    ) lc ON lc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*) AS comment_count
+      FROM post_comments
+      GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    WHERE p.id IN (${inPlaceholders})`,
+    unique,
+  );
+  const out = {};
+  for (const row of result.rows) {
+    out[String(row.id)] = row;
+  }
+  return out;
+}
+
 async function updatePostByOwner(postId, ownerUserId, title, description) {
   const pid = Number(postId);
   const oid = Number(ownerUserId);
@@ -1639,6 +1723,39 @@ async function deletePostByOwner(postId, ownerUserId) {
   }
 
   const result = await query('DELETE FROM posts WHERE id = $1 AND user_id = $2', [pid, oid]);
+  return result.rowCount > 0;
+}
+
+/** @returns {Promise<number|null>} owner user id, or null if post missing */
+async function getPostOwnerUserId(postId) {
+  const pid = Number(postId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+
+  if (!isPostgresEnabled()) {
+    const post = memoryStore.posts.find((p) => Number(p.id) === pid);
+    return post ? Number(post.userId) : null;
+  }
+
+  const result = await query('SELECT user_id AS uid FROM posts WHERE id = $1 LIMIT 1', [pid]);
+  const uid = result.rows[0]?.uid;
+  return uid != null ? Number(uid) : null;
+}
+
+/** Moderation: delete a post regardless of caller. @returns {Promise<boolean>} */
+async function deletePostAsAdmin(postId) {
+  const pid = Number(postId);
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+
+  if (!isPostgresEnabled()) {
+    const idx = memoryStore.posts.findIndex((p) => Number(p.id) === pid);
+    if (idx === -1) return false;
+    memoryStore.posts.splice(idx, 1);
+    memoryStore.postLikes = memoryStore.postLikes.filter((l) => Number(l.postId) !== pid);
+    memoryStore.postComments = memoryStore.postComments.filter((c) => Number(c.postId) !== pid);
+    return true;
+  }
+
+  const result = await query('DELETE FROM posts WHERE id = $1', [pid]);
   return result.rowCount > 0;
 }
 
@@ -1877,8 +1994,11 @@ module.exports = {
   createMerchandise,
   createPost,
   fetchFeedPostByIdForViewer,
+  fetchPostsForAdminByIds,
   updatePostByOwner,
   deletePostByOwner,
+  getPostOwnerUserId,
+  deletePostAsAdmin,
   findPostVisibleToUser,
   likePost,
   unlikePost,

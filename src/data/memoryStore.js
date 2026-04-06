@@ -13,6 +13,7 @@ const memoryStore = {
       tipsEnabled: false,
       tipsUrl: null,
       isAdmin: false,
+      bannedUntil: null,
     },
   ],
   artists: [

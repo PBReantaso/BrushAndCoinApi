@@ -15,6 +15,19 @@ function tokenPayloadForUser(user) {
   };
 }
 
+function assertUserNotSuspended(dbUser) {
+  if (!dbUser) return;
+  const raw = dbUser.bannedUntil;
+  if (raw == null) return;
+  const t = new Date(raw).getTime();
+  if (!Number.isFinite(t) || t <= Date.now()) return;
+  const error = new Error(
+    'Your account is suspended. You can sign in again after the suspension ends.',
+  );
+  error.statusCode = 403;
+  throw error;
+}
+
 const USERNAME_MAX_LEN = 48;
 const NAME_MAX_LEN = 80;
 const AVATAR_URL_MAX_LEN = 400000;
@@ -112,6 +125,8 @@ async function login({ email, password }) {
     throw error;
   }
 
+  assertUserNotSuspended(user);
+
   const payload = tokenPayloadForUser(user);
   const accessToken = tokenService.issueAccessToken(payload);
   const refreshToken = tokenService.issueRefreshToken(payload);
@@ -149,6 +164,7 @@ async function refresh({ refreshToken }) {
     error.statusCode = 401;
     throw error;
   }
+  assertUserNotSuspended(dbUser);
   const accessToken = tokenService.issueAccessToken(tokenPayloadForUser(dbUser));
   return { accessToken };
 }
@@ -156,6 +172,7 @@ async function refresh({ refreshToken }) {
 async function me(user) {
   const userId = Number(user.id);
   const dbUser = await authRepository.findUserById(userId);
+  assertUserNotSuspended(dbUser);
   const [followerCount, followingCount] = await Promise.all([
     followsRepository.followerCount(userId),
     followsRepository.followingCount(userId),
@@ -171,7 +188,7 @@ async function me(user) {
       socialLinks: sanitizeSocialLinksBody(dbUser?.socialLinks),
       tipsEnabled: Boolean(dbUser?.tipsEnabled),
       tipsUrl: dbUser?.tipsUrl ?? null,
-      isPrivate: Boolean(dbUser?.isPrivate),
+      isPrivate: Boolean(dbUser?.isAdmin) || Boolean(dbUser?.isPrivate),
       followerCount,
       followingCount,
       isAdmin: Boolean(dbUser?.isAdmin),
@@ -271,9 +288,10 @@ async function updateProfile({
     throw error;
   }
 
+  const isAdminUser = Boolean(dbUser.isAdmin);
   const updated = await authRepository.updateUserProfileById(userId, {
     username: hasUsername ? nextUsername : undefined,
-    isPrivate: hasPrivate ? isPrivate : undefined,
+    isPrivate: isAdminUser ? true : hasPrivate ? isPrivate : undefined,
     firstName: hasFirstName ? String(firstName).trim() : undefined,
     lastName: hasLastName ? String(lastName).trim() : undefined,
     avatarUrl: hasAvatarUrl ? avatarUrl : undefined,
