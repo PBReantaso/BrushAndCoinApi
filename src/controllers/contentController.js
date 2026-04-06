@@ -215,6 +215,15 @@ async function updatePost(req, res, next) {
   }
 }
 
+async function deletePost(req, res, next) {
+  try {
+    const payload = await contentService.deletePost(req.params.id, req.user);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function likePost(req, res, next) {
   try {
     const payload = await contentService.likePost(req.params.id, req.user);
@@ -275,6 +284,7 @@ module.exports = {
   createMerchandise,
   createPost,
   updatePost,
+  deletePost,
   likePost,
   unlikePost,
   commentOnPost,

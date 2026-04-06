@@ -1619,6 +1619,29 @@ async function updatePostByOwner(postId, ownerUserId, title, description) {
   return fetchFeedPostByIdForViewer(pid, oid);
 }
 
+/** @returns {Promise<boolean>} true if a row was deleted */
+async function deletePostByOwner(postId, ownerUserId) {
+  const pid = Number(postId);
+  const oid = Number(ownerUserId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(oid) || oid <= 0) {
+    return false;
+  }
+
+  if (!isPostgresEnabled()) {
+    const idx = memoryStore.posts.findIndex((p) => Number(p.id) === pid);
+    if (idx === -1) return false;
+    const post = memoryStore.posts[idx];
+    if (Number(post.userId) !== oid) return false;
+    memoryStore.posts.splice(idx, 1);
+    memoryStore.postLikes = memoryStore.postLikes.filter((l) => Number(l.postId) !== pid);
+    memoryStore.postComments = memoryStore.postComments.filter((c) => Number(c.postId) !== pid);
+    return true;
+  }
+
+  const result = await query('DELETE FROM posts WHERE id = $1 AND user_id = $2', [pid, oid]);
+  return result.rowCount > 0;
+}
+
 async function createPost({
   userId,
   title,
@@ -1855,6 +1878,7 @@ module.exports = {
   createPost,
   fetchFeedPostByIdForViewer,
   updatePostByOwner,
+  deletePostByOwner,
   findPostVisibleToUser,
   likePost,
   unlikePost,

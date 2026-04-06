@@ -3,6 +3,18 @@ const followsRepository = require('../repositories/followsRepository');
 const bcrypt = require('bcryptjs');
 const tokenService = require('./tokenService');
 
+function tokenPayloadForUser(user) {
+  if (!user) {
+    return { sub: 0, email: '', username: '', isAdmin: false };
+  }
+  return {
+    sub: user.id,
+    email: user.email,
+    username: user.username ?? '',
+    isAdmin: Boolean(user.isAdmin),
+  };
+}
+
 const USERNAME_MAX_LEN = 48;
 const NAME_MAX_LEN = 80;
 const AVATAR_URL_MAX_LEN = 400000;
@@ -70,20 +82,18 @@ async function signup({ email, password }) {
     username,
     password: passwordHash,
   });
-  const accessToken = tokenService.issueAccessToken({
-    sub: created.id,
-    email: created.email,
-    username: created.username,
-  });
-  const refreshToken = tokenService.issueRefreshToken({
-    sub: created.id,
-    email: created.email,
-    username: created.username,
-  });
+  const payload = tokenPayloadForUser({ ...created, isAdmin: false });
+  const accessToken = tokenService.issueAccessToken(payload);
+  const refreshToken = tokenService.issueRefreshToken(payload);
   return {
     accessToken,
     refreshToken,
-    user: { id: created.id, email: created.email, username: created.username },
+    user: {
+      id: created.id,
+      email: created.email,
+      username: created.username,
+      isAdmin: false,
+    },
   };
 }
 
@@ -102,20 +112,18 @@ async function login({ email, password }) {
     throw error;
   }
 
-  const accessToken = tokenService.issueAccessToken({
-    sub: user.id,
-    email: user.email,
-    username: user.username,
-  });
-  const refreshToken = tokenService.issueRefreshToken({
-    sub: user.id,
-    email: user.email,
-    username: user.username,
-  });
+  const payload = tokenPayloadForUser(user);
+  const accessToken = tokenService.issueAccessToken(payload);
+  const refreshToken = tokenService.issueRefreshToken(payload);
   return {
     accessToken,
     refreshToken,
-    user: { id: user.id, email: user.email, username: user.username },
+    user: {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      isAdmin: Boolean(user.isAdmin),
+    },
   };
 }
 
@@ -135,11 +143,13 @@ async function refresh({ refreshToken }) {
     throw error;
   }
 
-  const accessToken = tokenService.issueAccessToken({
-    sub: payload.sub,
-    email: payload.email,
-    username: payload.username,
-  });
+  const dbUser = await authRepository.findUserById(Number(payload.sub));
+  if (!dbUser) {
+    const error = new Error('User no longer exists.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const accessToken = tokenService.issueAccessToken(tokenPayloadForUser(dbUser));
   return { accessToken };
 }
 
@@ -164,6 +174,7 @@ async function me(user) {
       isPrivate: Boolean(dbUser?.isPrivate),
       followerCount,
       followingCount,
+      isAdmin: Boolean(dbUser?.isAdmin),
     },
   };
 }
@@ -276,16 +287,9 @@ async function updateProfile({
     throw error;
   }
 
-  const accessToken = tokenService.issueAccessToken({
-    sub: updated.id,
-    email: updated.email,
-    username: updated.username,
-  });
-  const refreshToken = tokenService.issueRefreshToken({
-    sub: updated.id,
-    email: updated.email,
-    username: updated.username,
-  });
+  const payload = tokenPayloadForUser(updated);
+  const accessToken = tokenService.issueAccessToken(payload);
+  const refreshToken = tokenService.issueRefreshToken(payload);
 
   return {
     accessToken,

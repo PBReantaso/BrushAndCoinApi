@@ -61,11 +61,13 @@ async function findUserIdByUsernameKey(username, excludeUserId = 0) {
 
 async function findUserByEmail(email) {
   if (!isPostgresEnabled()) {
-    return (
+    const u =
       memoryStore.users.find(
         (user) => user.email.toLowerCase() === String(email).toLowerCase(),
-      ) || null
-    );
+      ) || null;
+    if (!u) return null;
+    if (u.isAdmin === undefined) u.isAdmin = false;
+    return u;
   }
 
   const result = await query(
@@ -73,7 +75,8 @@ async function findUserByEmail(email) {
             COALESCE(is_private, FALSE) AS "isPrivate",
             COALESCE(first_name, '') AS "firstName",
             COALESCE(last_name, '') AS "lastName",
-            avatar_url AS "avatarUrl"
+            avatar_url AS "avatarUrl",
+            COALESCE(is_admin, FALSE) AS "isAdmin"
      FROM users
      WHERE LOWER(email) = LOWER($1)
      LIMIT 1`,
@@ -82,7 +85,7 @@ async function findUserByEmail(email) {
   return result.rows[0] || null;
 }
 
-async function createUser({ email, password, username }) {
+async function createUser({ email, password, username, isAdmin = false }) {
   if (!isPostgresEnabled()) {
     const taken = await findUserIdByUsernameKey(username, 0);
     if (taken) {
@@ -103,6 +106,7 @@ async function createUser({ email, password, username }) {
       socialLinks: defaultSocialLinks(),
       tipsEnabled: false,
       tipsUrl: null,
+      isAdmin: Boolean(isAdmin),
     };
     memoryStore.users.push(user);
     return user;
@@ -110,8 +114,10 @@ async function createUser({ email, password, username }) {
 
   try {
     const result = await query(
-      'INSERT INTO users (email, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, email, username',
-      [email, username, password, 'patron'],
+      `INSERT INTO users (email, username, password_hash, role, is_admin)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, email, username, COALESCE(is_admin, FALSE) AS "isAdmin"`,
+      [email, username, password, 'patron', Boolean(isAdmin)],
     );
     return result.rows[0];
   } catch (e) {
@@ -135,6 +141,7 @@ async function findUserById(id) {
     u.socialLinks = normalizeUserSocialLinks(u.socialLinks);
     if (u.tipsEnabled === undefined) u.tipsEnabled = false;
     if (u.tipsUrl === undefined) u.tipsUrl = null;
+    if (u.isAdmin === undefined) u.isAdmin = false;
     return u;
   }
 
@@ -146,7 +153,8 @@ async function findUserById(id) {
             avatar_url AS "avatarUrl",
             COALESCE(social_links, '{"facebook":"","instagram":"","twitter":"","website":""}'::jsonb) AS "socialLinks",
             COALESCE(tips_enabled, FALSE) AS "tipsEnabled",
-            tips_url AS "tipsUrl"
+            tips_url AS "tipsUrl",
+            COALESCE(is_admin, FALSE) AS "isAdmin"
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -157,6 +165,21 @@ async function findUserById(id) {
     row.socialLinks = normalizeUserSocialLinks(row.socialLinks);
   }
   return row || null;
+}
+
+async function setUserIsAdmin(userId, isAdmin) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    return;
+  }
+  if (!isPostgresEnabled()) {
+    const u = memoryStore.users.find((user) => Number(user.id) === uid);
+    if (u) {
+      u.isAdmin = Boolean(isAdmin);
+    }
+    return;
+  }
+  await query('UPDATE users SET is_admin = $2 WHERE id = $1', [uid, Boolean(isAdmin)]);
 }
 
 async function isUserPrivate(userId) {
@@ -264,6 +287,7 @@ async function updateUserProfileById(id, {
       socialLinks: normalizeUserSocialLinks(user.socialLinks),
       tipsEnabled: Boolean(user.tipsEnabled),
       tipsUrl: user.tipsUrl ?? null,
+      isAdmin: Boolean(user.isAdmin),
     };
   }
 
@@ -317,7 +341,8 @@ async function updateUserProfileById(id, {
          avatar_url AS "avatarUrl",
          COALESCE(social_links, '{"facebook":"","instagram":"","twitter":"","website":""}'::jsonb) AS "socialLinks",
          COALESCE(tips_enabled, FALSE) AS "tipsEnabled",
-         tips_url AS "tipsUrl"`,
+         tips_url AS "tipsUrl",
+         COALESCE(is_admin, FALSE) AS "isAdmin"`,
       vals,
     );
     const row = result.rows[0];
@@ -482,6 +507,7 @@ module.exports = {
   findUserByEmail,
   createUser,
   findUserById,
+  setUserIsAdmin,
   updateUserProfileById,
   deleteUserById,
   searchUsersByQuery,

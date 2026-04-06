@@ -507,6 +507,29 @@ async function updatePost(postId, input, user) {
   return { post };
 }
 
+async function deletePost(postId, user) {
+  const id = Number(postId);
+  const userId = Number(user?.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid post id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!Number.isFinite(userId) || userId <= 0) {
+    const error = new Error('Authentication required.');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const deleted = await contentRepository.deletePostByOwner(id, userId);
+  if (!deleted) {
+    const error = new Error('Post not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return { success: true };
+}
+
 async function likePost(postId, user) {
   const id = Number(postId);
   const userId = Number(user?.id);
@@ -615,6 +638,7 @@ module.exports = {
   createMerchandiseItem,
   createPost,
   updatePost,
+  deletePost,
   likePost,
   unlikePost,
   commentOnPost,

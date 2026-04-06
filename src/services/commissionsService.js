@@ -61,6 +61,11 @@ async function markCommissionViewed(commissionId, user) {
     throw err;
   }
   await commissionsRepository.markCommissionThreadViewed(cid, userId);
+  // Align with opening the commission chat: clear message unread-count for this thread.
+  const convo = await contentRepository.findConversationByCommissionId(cid);
+  if (convo?.id != null) {
+    await contentRepository.upsertConversationRead(convo.id, userId);
+  }
   return { ok: true };
 }
 

@@ -13,6 +13,7 @@ function requireAuth(req, res, next) {
       id: payload.sub,
       email: payload.email,
       username: payload.username,
+      isAdmin: Boolean(payload.isAdmin),
     };
     return next();
   } catch (_) {

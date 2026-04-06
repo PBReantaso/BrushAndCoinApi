@@ -12,6 +12,7 @@ const memoryStore = {
       socialLinks: { facebook: '', instagram: '', twitter: '', website: '' },
       tipsEnabled: false,
       tipsUrl: null,
+      isAdmin: false,
     },
   ],
   artists: [
@@ -78,6 +79,8 @@ const memoryStore = {
   /** @type {{ conversationId: number, userId: number, lastReadAt: string }[]} */
   conversationReads: [],
   notifications: [],
+  /** @type {{ id: number, reporterId: number, targetKind: string, targetId: number, reason: string|null, createdAt: string }[]} */
+  reports: [],
   pushDevices: [],
   commissions: [
     {

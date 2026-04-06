@@ -1,8 +1,12 @@
+// Load .env before any route/module that reads process.env (including via transitive requires).
+require('./config/env');
 const { app } = require('./app');
 const { env } = require('./config/env');
 const { isPostgresEnabled, probeConnection } = require('./config/database');
+const { ensureAdminUser } = require('./bootstrap/ensureAdminUser');
 
 async function startServer() {
+  await ensureAdminUser();
   if (isPostgresEnabled()) {
     const ok = await probeConnection();
     if (!ok) {
