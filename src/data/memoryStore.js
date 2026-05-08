@@ -14,6 +14,8 @@ const memoryStore = {
       tipsUrl: null,
       isAdmin: false,
       bannedUntil: null,
+      banStrikeCount: 0,
+      permanentlyBannedAt: null,
     },
   ],
   artists: [
@@ -82,6 +84,14 @@ const memoryStore = {
   notifications: [],
   /** @type {{ id: number, reporterId: number, targetKind: string, targetId: number, reason: string|null, createdAt: string }[]} */
   reports: [],
+  /** @type {{ id:number, targetUserId:number, adminUserId:number|null, reportId:number|null, actionType:string, reason:string|null, details:object, createdAt:string }[]} */
+  moderationActions: [],
+  /** @type {{ id:number, userId:number, moderationActionId:number|null, message:string, status:string, adminNote:string|null, resolvedByAdminId:number|null, resolvedAt:string|null, createdAt:string }[]} */
+  moderationAppeals: [],
+  /** @type {{ id: number, postId: number, postOwnerId: number, viewerId: number|null, createdAt: string }[]} */
+  postViews: [],
+  /** @type {{ id:number, userId:number, name:string, query:string, filters:object, createdAt:string, updatedAt:string }[]} */
+  savedSearches: [],
   pushDevices: [],
   commissions: [
     {
@@ -176,6 +186,10 @@ const memoryStore = {
       escrowStatus: 'released',
       escrowFundedAt: '2026-03-15T10:00:00Z',
       escrowReleasedAt: '2026-03-17T14:00:00Z',
+      reviewRating: 5,
+      reviewComment: 'Great communication and delivered exactly what I asked for.',
+      reviewedAt: '2026-03-17T15:00:00Z',
+      reviewedByPatronId: 1,
     },
     {
       id: 5,

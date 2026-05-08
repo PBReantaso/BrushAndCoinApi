@@ -49,10 +49,24 @@ async function updateCommissionStatus(req, res, next) {
   }
 }
 
+async function submitReview(req, res, next) {
+  try {
+    const payload = await commissionsService.submitReview(
+      req.params.id,
+      req.body ?? {},
+      req.user,
+    );
+    return res.json(payload);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   listCommissions,
   getCommission,
   markCommissionViewed,
   createCommission,
   updateCommissionStatus,
+  submitReview,
 };

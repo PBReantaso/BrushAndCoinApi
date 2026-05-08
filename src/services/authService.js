@@ -17,6 +17,13 @@ function tokenPayloadForUser(user) {
 
 function assertUserNotSuspended(dbUser) {
   if (!dbUser) return;
+  if (dbUser.permanentlyBannedAt != null) {
+    const error = new Error(
+      'Your account has been permanently banned due to repeated policy violations.',
+    );
+    error.statusCode = 403;
+    throw error;
+  }
   const raw = dbUser.bannedUntil;
   if (raw == null) return;
   const t = new Date(raw).getTime();

@@ -13,5 +13,6 @@ router.post(
 router.get('/commissions/:id', requireAuth, commissionsController.getCommission);
 router.post('/commissions', requireAuth, commissionsController.createCommission);
 router.put('/commissions/:id/status', requireAuth, commissionsController.updateCommissionStatus);
+router.post('/commissions/:id/review', requireAuth, commissionsController.submitReview);
 
 module.exports = { commissionsRoutes: router };

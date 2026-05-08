@@ -10,6 +10,9 @@ const { notificationsRoutes } = require('./routes/notificationsRoutes');
 const { usersRoutes } = require('./routes/usersRoutes');
 const { healthRoutes } = require('./routes/healthRoutes');
 const { reportsRoutes } = require('./routes/reportsRoutes');
+const { analyticsRoutes } = require('./routes/analyticsRoutes');
+const { moderationRoutes } = require('./routes/moderationRoutes');
+const { discoveryRoutes } = require('./routes/discoveryRoutes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -27,6 +30,9 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use(healthRoutes);
 app.use(reportsRoutes);
+app.use(analyticsRoutes);
+app.use(moderationRoutes);
+app.use(discoveryRoutes);
 app.use(contentRoutes);
 app.use(commissionsRoutes);
 app.use(notificationsRoutes);

@@ -1,5 +1,6 @@
 const authRepository = require('../repositories/authRepository');
 const contentRepository = require('../repositories/contentRepository');
+const commissionsRepository = require('../repositories/commissionsRepository');
 const followsRepository = require('../repositories/followsRepository');
 const notificationsService = require('./notificationsService');
 
@@ -197,6 +198,29 @@ async function getUserMerchandise(profileUserId, viewer) {
   return { merchandise };
 }
 
+async function getVerifiedReviews(profileUserId) {
+  const id = Number(profileUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const error = new Error('Invalid user id.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const exists = await authRepository.findPublicUserById(id);
+  if (!exists) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const reviews = await commissionsRepository.listVerifiedReviewsForArtist(id, 30);
+  const ratingCount = reviews.length;
+  const averageRating = ratingCount
+    ? Number(
+      (reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) / ratingCount).toFixed(2),
+    )
+    : 0;
+  return { reviews, ratingCount, averageRating };
+}
+
 module.exports = {
   searchUsers,
   getPublicProfile,
@@ -206,4 +230,5 @@ module.exports = {
   unfollowUser,
   getFollowersList,
   getFollowingList,
+  getVerifiedReviews,
 };

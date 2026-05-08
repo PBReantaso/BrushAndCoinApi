@@ -73,6 +73,15 @@ async function getFollowing(req, res, next) {
   }
 }
 
+async function getVerifiedReviews(req, res, next) {
+  try {
+    const payload = await usersService.getVerifiedReviews(req.params.id);
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   search,
   getProfile,
@@ -82,4 +91,5 @@ module.exports = {
   unfollow,
   getFollowers,
   getFollowing,
+  getVerifiedReviews,
 };

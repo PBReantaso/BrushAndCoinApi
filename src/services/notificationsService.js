@@ -305,6 +305,30 @@ function notifyCommissionReleasedToArtist(artistId, patronUser, commission) {
   });
 }
 
+function notifyCommissionDueSoonToArtist(artistId, commission) {
+  const aid = Number(artistId);
+  if (!Number.isFinite(aid) || aid <= 0) {
+    return;
+  }
+  const titleText = String(commission?.title ?? 'A commission').trim() || 'A commission';
+  const deadlineText =
+    commission?.deadline == null || String(commission.deadline).trim() === ''
+      ? null
+      : String(commission.deadline).trim();
+  const body = deadlineText
+    ? `"${titleText}" is almost due (${deadlineText}).`
+    : `"${titleText}" is almost due.`;
+  scheduleWork(async () => {
+    await notificationsRepository.insertNotification({
+      userId: aid,
+      type: 'commission_due_soon',
+      title: 'Commission deadline reminder',
+      body,
+      payload: { commissionId: Number(commission?.id), deadline: deadlineText },
+    });
+  });
+}
+
 function notifyCommissionStatusToPatron(patronId, artistUser, commission, newStatus) {
   const p = Number(patronId);
   const aid = Number(artistUser?.id);
@@ -389,6 +413,7 @@ module.exports = {
   notifyCommissionPatronConfirmedPayment,
   notifyCommissionPatronRequestedRevision,
   notifyCommissionReleasedToArtist,
+  notifyCommissionDueSoonToArtist,
   notifyCommissionStatusToPatron,
   broadcastSystemAnnouncement,
 };

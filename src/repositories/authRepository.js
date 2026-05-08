@@ -68,6 +68,8 @@ async function findUserByEmail(email) {
     if (!u) return null;
     if (u.isAdmin === undefined) u.isAdmin = false;
     if (u.bannedUntil === undefined) u.bannedUntil = null;
+    if (u.banStrikeCount === undefined) u.banStrikeCount = 0;
+    if (u.permanentlyBannedAt === undefined) u.permanentlyBannedAt = null;
     return u;
   }
 
@@ -78,7 +80,9 @@ async function findUserByEmail(email) {
             COALESCE(last_name, '') AS "lastName",
             avatar_url AS "avatarUrl",
             COALESCE(is_admin, FALSE) AS "isAdmin",
-            banned_until AS "bannedUntil"
+            banned_until AS "bannedUntil",
+            COALESCE(ban_strike_count, 0) AS "banStrikeCount",
+            permanently_banned_at AS "permanentlyBannedAt"
      FROM users
      WHERE LOWER(email) = LOWER($1)
      LIMIT 1`,
@@ -110,6 +114,8 @@ async function createUser({ email, password, username, isAdmin = false }) {
       tipsUrl: null,
       isAdmin: Boolean(isAdmin),
       bannedUntil: null,
+      banStrikeCount: 0,
+      permanentlyBannedAt: null,
     };
     memoryStore.users.push(user);
     return user;
@@ -122,7 +128,9 @@ async function createUser({ email, password, username, isAdmin = false }) {
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, email, username,
          COALESCE(is_admin, FALSE) AS "isAdmin",
-         COALESCE(is_private, FALSE) AS "isPrivate"`,
+         COALESCE(is_private, FALSE) AS "isPrivate",
+         COALESCE(ban_strike_count, 0) AS "banStrikeCount",
+         permanently_banned_at AS "permanentlyBannedAt"`,
       [email, username, password, 'patron', admin, admin],
     );
     return result.rows[0];
@@ -149,6 +157,8 @@ async function findUserById(id) {
     if (u.tipsUrl === undefined) u.tipsUrl = null;
     if (u.isAdmin === undefined) u.isAdmin = false;
     if (u.bannedUntil === undefined) u.bannedUntil = null;
+    if (u.banStrikeCount === undefined) u.banStrikeCount = 0;
+    if (u.permanentlyBannedAt === undefined) u.permanentlyBannedAt = null;
     return u;
   }
 
@@ -162,7 +172,9 @@ async function findUserById(id) {
             COALESCE(tips_enabled, FALSE) AS "tipsEnabled",
             tips_url AS "tipsUrl",
             COALESCE(is_admin, FALSE) AS "isAdmin",
-            banned_until AS "bannedUntil"
+            banned_until AS "bannedUntil",
+            COALESCE(ban_strike_count, 0) AS "banStrikeCount",
+            permanently_banned_at AS "permanentlyBannedAt"
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -200,6 +212,80 @@ async function setUserBannedUntil(userId, bannedUntil) {
     uid,
     bannedUntil instanceof Date ? bannedUntil : bannedUntil,
   ]);
+}
+
+/**
+ * Applies one ban strike and sets a temporary or permanent ban.
+ * Permanent threshold: more than 3 bans => on 4th strike user is permanently banned.
+ * @param {number} userId
+ * @param {Date} bannedUntil
+ * @returns {Promise<{ bannedUntil: string|null, banStrikeCount: number, permanentlyBannedAt: string|null }|null>}
+ */
+async function applyBanStrike(userId, bannedUntil) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return null;
+  const untilDate = bannedUntil instanceof Date ? bannedUntil : new Date(bannedUntil);
+  if (!Number.isFinite(untilDate.getTime())) return null;
+
+  if (!isPostgresEnabled()) {
+    const u = memoryStore.users.find((user) => Number(user.id) === uid);
+    if (!u) return null;
+    const nextStrikes = Number(u.banStrikeCount ?? 0) + 1;
+    u.banStrikeCount = nextStrikes;
+    if (nextStrikes > 3) {
+      u.permanentlyBannedAt = new Date().toISOString();
+      u.bannedUntil = null;
+    } else {
+      u.bannedUntil = untilDate.toISOString();
+    }
+    return {
+      bannedUntil: u.bannedUntil ?? null,
+      banStrikeCount: Number(u.banStrikeCount ?? 0),
+      permanentlyBannedAt: u.permanentlyBannedAt ?? null,
+    };
+  }
+
+  const result = await query(
+    `UPDATE users
+     SET ban_strike_count = COALESCE(ban_strike_count, 0) + 1,
+         permanently_banned_at = CASE
+           WHEN COALESCE(ban_strike_count, 0) + 1 > 3
+             THEN COALESCE(permanently_banned_at, NOW())
+           ELSE permanently_banned_at
+         END,
+         banned_until = CASE
+           WHEN COALESCE(ban_strike_count, 0) + 1 > 3
+             THEN NULL
+           ELSE $2
+         END
+     WHERE id = $1
+     RETURNING
+       banned_until AS "bannedUntil",
+       COALESCE(ban_strike_count, 0) AS "banStrikeCount",
+       permanently_banned_at AS "permanentlyBannedAt"`,
+    [uid, untilDate],
+  );
+  return result.rows[0] || null;
+}
+
+async function clearUserBan(userId) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return false;
+  if (!isPostgresEnabled()) {
+    const u = memoryStore.users.find((user) => Number(user.id) === uid);
+    if (!u) return false;
+    u.bannedUntil = null;
+    u.permanentlyBannedAt = null;
+    return true;
+  }
+  const result = await query(
+    `UPDATE users
+     SET banned_until = NULL,
+         permanently_banned_at = NULL
+     WHERE id = $1`,
+    [uid],
+  );
+  return result.rowCount > 0;
 }
 
 async function setUserIsAdmin(userId, isAdmin) {
@@ -333,6 +419,8 @@ async function updateUserProfileById(id, {
       tipsEnabled: Boolean(user.tipsEnabled),
       tipsUrl: user.tipsUrl ?? null,
       isAdmin: Boolean(user.isAdmin),
+      banStrikeCount: Number(user.banStrikeCount ?? 0),
+      permanentlyBannedAt: user.permanentlyBannedAt ?? null,
     };
   }
 
@@ -387,7 +475,9 @@ async function updateUserProfileById(id, {
          COALESCE(social_links, '{"facebook":"","instagram":"","twitter":"","website":""}'::jsonb) AS "socialLinks",
          COALESCE(tips_enabled, FALSE) AS "tipsEnabled",
          tips_url AS "tipsUrl",
-         COALESCE(is_admin, FALSE) AS "isAdmin"`,
+         COALESCE(is_admin, FALSE) AS "isAdmin",
+         COALESCE(ban_strike_count, 0) AS "banStrikeCount",
+         permanently_banned_at AS "permanentlyBannedAt"`,
       vals,
     );
     const row = result.rows[0];
@@ -552,6 +642,8 @@ module.exports = {
   findUserByEmail,
   createUser,
   findUserById,
+  applyBanStrike,
+  clearUserBan,
   setUserBannedUntil,
   setUserIsAdmin,
   updateUserProfileById,

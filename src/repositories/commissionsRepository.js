@@ -64,6 +64,11 @@ function mapRow(row) {
     escrowFundedAt: row.escrow_funded_at ?? row.escrowFundedAt ?? null,
     escrowReleasedAt: row.escrow_released_at ?? row.escrowReleasedAt ?? null,
     preferredPaymentMethod: row.preferred_payment_method ?? row.preferredPaymentMethod ?? null,
+    dueSoonNotifiedAt: row.due_soon_notified_at ?? row.dueSoonNotifiedAt ?? null,
+    reviewRating: row.review_rating ?? row.reviewRating ?? null,
+    reviewComment: row.review_comment ?? row.reviewComment ?? null,
+    reviewedAt: row.reviewed_at ?? row.reviewedAt ?? null,
+    reviewedByPatronId: row.reviewed_by_patron_id ?? row.reviewedByPatronId ?? null,
   };
 }
 
@@ -138,6 +143,10 @@ function toApiCommission(m) {
     escrowFundedAt: toIso(m.escrowFundedAt),
     escrowReleasedAt: toIso(m.escrowReleasedAt),
     preferredPaymentMethod: m.preferredPaymentMethod ?? null,
+    reviewRating: m.reviewRating != null ? Number(m.reviewRating) : null,
+    reviewComment: m.reviewComment ?? null,
+    reviewedAt: toIso(m.reviewedAt),
+    reviewedByPatronId: m.reviewedByPatronId ?? null,
   };
   return { ...base, escrowSimulation: buildEscrowSimulation(m) };
 }
@@ -206,7 +215,12 @@ async function listCommissionsForUser(userId) {
       c.escrow_funded_at AS "escrowFundedAt",
       c.escrow_released_at AS "escrowReleasedAt",
       c.preferred_payment_method AS "preferredPaymentMethod",
-      c.submission_images AS "submissionImages"
+      c.due_soon_notified_at AS "dueSoonNotifiedAt",
+      c.submission_images AS "submissionImages",
+      c.review_rating AS "reviewRating",
+      c.review_comment AS "reviewComment",
+      c.reviewed_at AS "reviewedAt",
+      c.reviewed_by_patron_id AS "reviewedByPatronId"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
     LEFT JOIN users up ON up.id = c.patron_id
@@ -271,7 +285,12 @@ async function findCommissionById(id) {
       c.escrow_funded_at AS "escrowFundedAt",
       c.escrow_released_at AS "escrowReleasedAt",
       c.preferred_payment_method AS "preferredPaymentMethod",
-      c.submission_images AS "submissionImages"
+      c.due_soon_notified_at AS "dueSoonNotifiedAt",
+      c.submission_images AS "submissionImages",
+      c.review_rating AS "reviewRating",
+      c.review_comment AS "reviewComment",
+      c.reviewed_at AS "reviewedAt",
+      c.reviewed_by_patron_id AS "reviewedByPatronId"
     FROM commissions c
     INNER JOIN users ua ON ua.id = c.artist_id
     LEFT JOIN users up ON up.id = c.patron_id
@@ -336,6 +355,7 @@ async function createCommission(data) {
       escrowFundedAt: null,
       escrowReleasedAt: null,
       preferredPaymentMethod: row.preferredPaymentMethod ?? null,
+      dueSoonNotifiedAt: null,
     };
     memoryStore.commissions.push(m);
     return m;
@@ -372,7 +392,8 @@ async function createCommission(data) {
       escrow_status AS "escrowStatus",
       escrow_funded_at AS "escrowFundedAt",
       escrow_released_at AS "escrowReleasedAt",
-      preferred_payment_method AS "preferredPaymentMethod"`;
+      preferred_payment_method AS "preferredPaymentMethod",
+      due_soon_notified_at AS "dueSoonNotifiedAt"`;
 
   const insertParams = [
     patronId,
@@ -457,7 +478,116 @@ const RETURNING_COMMISSION = `RETURNING
       escrow_funded_at AS "escrowFundedAt",
       escrow_released_at AS "escrowReleasedAt",
       preferred_payment_method AS "preferredPaymentMethod",
-      submission_images AS "submissionImages"`;
+      due_soon_notified_at AS "dueSoonNotifiedAt",
+      submission_images AS "submissionImages",
+      review_rating AS "reviewRating",
+      review_comment AS "reviewComment",
+      reviewed_at AS "reviewedAt",
+      reviewed_by_patron_id AS "reviewedByPatronId"`;
+
+async function submitCommissionReview(commissionId, patronUserId, { rating, comment }) {
+  const cid = Number(commissionId);
+  const pid = Number(patronUserId);
+  const stars = Number(rating);
+  const reviewComment = String(comment ?? '').trim();
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(pid) || pid <= 0) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (!Number.isFinite(stars) || stars < 1 || stars > 5) {
+    return { ok: false, reason: 'invalid_rating' };
+  }
+  if (reviewComment.length > 600) {
+    return { ok: false, reason: 'comment_too_long' };
+  }
+
+  if (!isPostgresEnabled()) {
+    const m = memoryStore.commissions.find((c) => Number(c.id) === cid);
+    if (!m) return { ok: false, reason: 'not_found' };
+    if (Number(m.patronId) !== pid) return { ok: false, reason: 'forbidden' };
+    if (String(m.status) !== 'completed') return { ok: false, reason: 'not_completed' };
+    if (m.reviewRating != null) return { ok: false, reason: 'already_reviewed' };
+    m.reviewRating = Math.round(stars);
+    m.reviewComment = reviewComment || null;
+    m.reviewedAt = new Date().toISOString();
+    m.reviewedByPatronId = pid;
+    return { ok: true, commission: mapRow(m) };
+  }
+
+  const result = await query(
+    `UPDATE commissions
+     SET review_rating = $3,
+         review_comment = $4,
+         reviewed_at = NOW(),
+         reviewed_by_patron_id = $2
+     WHERE id = $1
+       AND patron_id = $2
+       AND status = 'completed'
+       AND review_rating IS NULL
+     ${RETURNING_COMMISSION}`,
+    [cid, pid, Math.round(stars), reviewComment || null],
+  );
+  if (!result.rows[0]) {
+    const existing = await findCommissionById(cid);
+    if (!existing) return { ok: false, reason: 'not_found' };
+    if (Number(existing.patronId) !== pid) return { ok: false, reason: 'forbidden' };
+    if (String(existing.status) !== 'completed') return { ok: false, reason: 'not_completed' };
+    if (existing.reviewRating != null) return { ok: false, reason: 'already_reviewed' };
+    return { ok: false, reason: 'invalid' };
+  }
+  return { ok: true, commission: mapRow(result.rows[0]) };
+}
+
+async function listVerifiedReviewsForArtist(artistUserId, limit = 20) {
+  const aid = Number(artistUserId);
+  const lim = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  if (!Number.isFinite(aid) || aid <= 0) return [];
+
+  if (!isPostgresEnabled()) {
+    return memoryStore.commissions
+      .filter((c) => Number(c.artistId) === aid)
+      .filter((c) => String(c.status) === 'completed')
+      .filter((c) => c.reviewRating != null)
+      .sort((a, b) => new Date(b.reviewedAt || 0).getTime() - new Date(a.reviewedAt || 0).getTime())
+      .slice(0, lim)
+      .map((c) => {
+        const patron = memoryStore.users.find((u) => Number(u.id) === Number(c.patronId));
+        const reviewerUsername = patron
+          ? String(patron.username || '').trim() || String(patron.email || '').split('@')[0]
+          : 'Patron';
+        return {
+          commissionId: Number(c.id),
+          rating: Number(c.reviewRating),
+          comment: c.reviewComment ?? null,
+          reviewedAt: c.reviewedAt ?? null,
+          reviewerUserId: Number(c.patronId),
+          reviewerUsername,
+          reviewerAvatarUrl: patron?.avatarUrl ?? null,
+          commissionTitle: String(c.title || 'Commission'),
+        };
+      });
+  }
+
+  const result = await query(
+    `SELECT
+       c.id AS "commissionId",
+       c.review_rating AS "rating",
+       c.review_comment AS "comment",
+       c.reviewed_at AS "reviewedAt",
+       c.patron_id AS "reviewerUserId",
+       COALESCE(NULLIF(TRIM(p.username), ''), split_part(p.email, '@', 1), 'Patron') AS "reviewerUsername",
+       p.avatar_url AS "reviewerAvatarUrl",
+       c.title AS "commissionTitle"
+     FROM commissions c
+     INNER JOIN users p ON p.id = c.patron_id
+     WHERE c.artist_id = $1
+       AND c.status = 'completed'
+       AND c.review_rating IS NOT NULL
+     ORDER BY c.reviewed_at DESC NULLS LAST, c.id DESC
+     LIMIT $2`,
+    [aid, lim],
+  );
+  return result.rows;
+}
 
 async function updateCommissionStatus(commissionId, newStatus, actingUserId, options = {}) {
   const cid = Number(commissionId);
@@ -695,6 +825,77 @@ async function markCommissionThreadViewed(commissionId, viewerId) {
   );
 }
 
+async function listDueSoonReminderCandidatesForArtist(artistUserId, withinHours = 48) {
+  const aid = Number(artistUserId);
+  const hours = Number(withinHours);
+  if (!Number.isFinite(aid) || aid <= 0) return [];
+  const safeHours = Number.isFinite(hours) && hours > 0 ? Math.min(240, Math.floor(hours)) : 48;
+
+  if (!isPostgresEnabled()) {
+    const now = Date.now();
+    const max = now + safeHours * 3600000;
+    return memoryStore.commissions
+      .filter((c) => Number(c.artistId) === aid)
+      .filter((c) => c.dueSoonNotifiedAt == null)
+      .filter((c) => ['accepted', 'inProgress'].includes(String(c.status)))
+      .filter((c) => c.deadline != null && c.deadline !== '')
+      .filter((c) => {
+        const t = new Date(c.deadline).getTime();
+        return Number.isFinite(t) && t > now && t <= max;
+      })
+      .map((c) => ({
+        id: Number(c.id),
+        title: String(c.title || 'Commission'),
+        deadline: c.deadline,
+        artistId: Number(c.artistId),
+      }));
+  }
+
+  const result = await query(
+    `SELECT
+       id,
+       title,
+       deadline,
+       artist_id AS "artistId"
+     FROM commissions
+     WHERE artist_id = $1
+       AND due_soon_notified_at IS NULL
+       AND status IN ('accepted', 'inProgress')
+       AND NULLIF(deadline, '') IS NOT NULL
+       AND (NULLIF(deadline, '')::timestamptz) > NOW()
+       AND (NULLIF(deadline, '')::timestamptz) <= NOW() + ($2::int * interval '1 hour')
+     ORDER BY deadline ASC`,
+    [aid, safeHours],
+  );
+  return result.rows;
+}
+
+/** Returns true when this call marked the reminder timestamp (first notifier wins). */
+async function markDueSoonReminderSent(commissionId, artistUserId) {
+  const cid = Number(commissionId);
+  const aid = Number(artistUserId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(aid) || aid <= 0) return false;
+
+  if (!isPostgresEnabled()) {
+    const row = memoryStore.commissions.find(
+      (c) => Number(c.id) === cid && Number(c.artistId) === aid,
+    );
+    if (!row || row.dueSoonNotifiedAt != null) return false;
+    row.dueSoonNotifiedAt = new Date().toISOString();
+    return true;
+  }
+
+  const result = await query(
+    `UPDATE commissions
+     SET due_soon_notified_at = NOW()
+     WHERE id = $1
+       AND artist_id = $2
+       AND due_soon_notified_at IS NULL`,
+    [cid, aid],
+  );
+  return result.rowCount > 0;
+}
+
 module.exports = {
   listCommissionsForUser,
   findCommissionById,
@@ -703,5 +904,9 @@ module.exports = {
   updateCommissionStatus,
   applyCommissionThreadMessage,
   markCommissionThreadViewed,
+  listDueSoonReminderCandidatesForArtist,
+  markDueSoonReminderSent,
+  submitCommissionReview,
+  listVerifiedReviewsForArtist,
   toApiCommission,
 };

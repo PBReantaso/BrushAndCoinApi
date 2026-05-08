@@ -2,6 +2,7 @@ const reportsRepository = require('../repositories/reportsRepository');
 const contentRepository = require('../repositories/contentRepository');
 const authRepository = require('../repositories/authRepository');
 const notificationsRepository = require('../repositories/notificationsRepository');
+const moderationRepository = require('../repositories/moderationRepository');
 
 async function listReports(query) {
   const raw = query?.status;
@@ -65,13 +66,20 @@ function _parseBanDays(raw) {
 /**
  * @param {number} userId
  * @param {number} days
- * @returns {Promise<string|null>} ISO end time
+ * @returns {Promise<{ bannedUntil: string|null, banStrikeCount: number, permanentlyBannedAt: string|null }|null>}
  */
 async function _extendBanByDays(userId, days) {
   const uid = Number(userId);
   if (!Number.isFinite(uid) || uid <= 0 || days <= 0) return null;
   const user = await authRepository.findUserById(uid);
   if (!user) return null;
+  if (user.permanentlyBannedAt != null) {
+    return {
+      bannedUntil: null,
+      banStrikeCount: Number(user.banStrikeCount ?? 0),
+      permanentlyBannedAt: user.permanentlyBannedAt,
+    };
+  }
   const now = Date.now();
   let base = now;
   const cur = user.bannedUntil ? new Date(user.bannedUntil).getTime() : NaN;
@@ -79,8 +87,7 @@ async function _extendBanByDays(userId, days) {
     base = cur;
   }
   const until = new Date(base + days * 86400000);
-  await authRepository.setUserBannedUntil(uid, until);
-  return until.toISOString();
+  return authRepository.applyBanStrike(uid, until);
 }
 
 /**
@@ -123,11 +130,13 @@ async function resolveReport(reportId, input, adminUser) {
   const sendWarning = st === 'resolved' && _parseBool(input?.sendWarning);
   const banDays = st === 'resolved' ? _parseBanDays(input?.banDays) : 0;
 
-  /** @type {{ postDeleted: boolean, warningSent: boolean, bannedUntil: string | null }} */
+  /** @type {{ postDeleted: boolean, warningSent: boolean, bannedUntil: string | null, banStrikeCount: number, permanentlyBanned: boolean }} */
   const moderation = {
     postDeleted: false,
     warningSent: false,
     bannedUntil: null,
+    banStrikeCount: 0,
+    permanentlyBanned: false,
   };
 
   if (st === 'resolved' && (deleteReportedPost || sendWarning || banDays > 0)) {
@@ -155,6 +164,16 @@ async function resolveReport(reportId, input, adminUser) {
 
     if (deleteReportedPost && kind === 'post' && Number.isFinite(targetId) && targetId > 0) {
       moderation.postDeleted = await contentRepository.deletePostAsAdmin(targetId);
+      if (moderation.postDeleted && reportedUserId != null) {
+        await moderationRepository.insertModerationAction({
+          targetUserId: reportedUserId,
+          adminUserId: adminId,
+          reportId: id,
+          actionType: 'post_deleted',
+          reason: resolutionNote || null,
+          details: { targetKind: kind, targetId },
+        });
+      }
     }
 
     if (sendWarning && reportedUserId != null) {
@@ -168,10 +187,39 @@ async function resolveReport(reportId, input, adminUser) {
         payload: { reportId: id },
       });
       moderation.warningSent = Boolean(row);
+      if (moderation.warningSent) {
+        await moderationRepository.insertModerationAction({
+          targetUserId: reportedUserId,
+          adminUserId: adminId,
+          reportId: id,
+          actionType: 'warning',
+          reason: resolutionNote || null,
+          details: { targetKind: kind, targetId },
+        });
+      }
     }
 
     if (banDays > 0 && reportedUserId != null) {
-      moderation.bannedUntil = await _extendBanByDays(reportedUserId, banDays);
+      const banResult = await _extendBanByDays(reportedUserId, banDays);
+      moderation.bannedUntil = banResult?.bannedUntil ?? null;
+      moderation.banStrikeCount = Number(banResult?.banStrikeCount ?? 0);
+      moderation.permanentlyBanned = banResult?.permanentlyBannedAt != null;
+      if (banResult != null) {
+        await moderationRepository.insertModerationAction({
+          targetUserId: reportedUserId,
+          adminUserId: adminId,
+          reportId: id,
+          actionType: moderation.permanentlyBanned ? 'permanent_ban' : 'temp_ban',
+          reason: resolutionNote || null,
+          details: {
+            targetKind: kind,
+            targetId,
+            banDays,
+            banStrikeCount: moderation.banStrikeCount,
+            bannedUntil: moderation.bannedUntil,
+          },
+        });
+      }
     }
   }
 

@@ -21,7 +21,36 @@ async function listCommissions(user) {
     throw err;
   }
   const commissions = await commissionsRepository.listCommissionsForUser(userId);
+  // Notify only artists when one of their active commissions is nearing deadline.
+  try {
+    await maybeSendDueSoonRemindersForArtist(userId, commissions);
+  } catch (e) {
+    // Keep listing resilient; reminder delivery should never block commission visibility.
+    // eslint-disable-next-line no-console
+    console.error('[commissions] due-soon reminder check failed', e);
+  }
   return { commissions };
+}
+
+async function maybeSendDueSoonRemindersForArtist(userId, commissions) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return;
+  // If the user has no artist-side commissions in this list call, skip extra DB query.
+  const hasArtistItems = (commissions || []).some((c) => Number(c?.artistId) === uid);
+  if (!hasArtistItems) return;
+
+  const candidates = await commissionsRepository.listDueSoonReminderCandidatesForArtist(uid, 48);
+  for (const c of candidates) {
+    const cid = Number(c?.id);
+    if (!Number.isFinite(cid) || cid <= 0) continue;
+    const marked = await commissionsRepository.markDueSoonReminderSent(cid, uid);
+    if (!marked) continue;
+    notificationsService.notifyCommissionDueSoonToArtist(uid, {
+      id: cid,
+      title: c?.title,
+      deadline: c?.deadline,
+    });
+  }
 }
 
 async function getCommission(commissionId, user) {
@@ -348,10 +377,62 @@ async function updateCommissionStatus(commissionId, input, user) {
   return { commission: commissionsRepository.toApiCommission(result.commission) };
 }
 
+async function submitReview(commissionId, input, user) {
+  const uid = Number(user?.id);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    const err = new Error('Authentication required.');
+    err.statusCode = 401;
+    throw err;
+  }
+  const rating = Number(input?.rating);
+  const comment = String(input?.comment ?? '');
+  const result = await commissionsRepository.submitCommissionReview(commissionId, uid, {
+    rating,
+    comment,
+  });
+  if (!result.ok) {
+    if (result.reason === 'not_found') {
+      const err = new Error('Commission not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (result.reason === 'forbidden') {
+      const err = new Error('Only the patron for this commission can submit a review.');
+      err.statusCode = 403;
+      throw err;
+    }
+    if (result.reason === 'not_completed') {
+      const err = new Error('Reviews can only be submitted after commission completion.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (result.reason === 'already_reviewed') {
+      const err = new Error('This commission already has a verified review.');
+      err.statusCode = 409;
+      throw err;
+    }
+    if (result.reason === 'invalid_rating') {
+      const err = new Error('rating must be between 1 and 5.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (result.reason === 'comment_too_long') {
+      const err = new Error('comment must be 600 characters or fewer.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const err = new Error('Could not submit review.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return { commission: commissionsRepository.toApiCommission(result.commission) };
+}
+
 module.exports = {
   listCommissions,
   getCommission,
   markCommissionViewed,
   createCommission,
   updateCommissionStatus,
+  submitReview,
 };
